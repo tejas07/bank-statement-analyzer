@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.iml
+out/
+
+# Java / Maven
+target/
+*.class
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+test-output/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
