@@ -50,6 +50,8 @@ public class TransactionAnalyzer {
                     .build());
         }
 
+
+
         log.info("Analyzed {} transactions", enriched.size());
         return enriched;
     }

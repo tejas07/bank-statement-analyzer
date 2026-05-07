@@ -3,33 +3,39 @@ package com.bankanalyzer.service;
 import com.bankanalyzer.api.dto.SummaryResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.util.retry.Retry;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Duration;
 import java.util.Set;
 
+/**
+ * Delivers webhook notifications via a non-blocking {@link WebClient}.
+ *
+ * <p>Uses Reactor's {@code retryWhen} with fixed 1-second delays between attempts —
+ * no {@link Thread#sleep} needed. The subscription is fire-and-forget; failures are
+ * logged but never bubble up to the caller.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class WebhookService {
 
-    private static final int MAX_RETRIES = 3;
-    private static final Set<String> BLOCKED_HOSTS = Set.of(
-        "localhost", "0.0.0.0", "::1"
-    );
+    private static final int     MAX_RETRIES    = 3;
+    private static final Duration RETRY_DELAY   = Duration.ofSeconds(1);
+    private static final Set<String> BLOCKED_HOSTS = Set.of("localhost", "0.0.0.0", "::1");
 
-    private final RestTemplate restTemplate;
+    private final WebClient webClient;
 
     /**
      * POSTs the summary result to the caller-provided webhook URL.
-     * Runs asynchronously so it never blocks the HTTP response.
-     * Retries up to 3 times on failure.
+     * Runs on the {@code webhookExecutor} thread pool so it never blocks the HTTP response.
+     * Retries up to {@value MAX_RETRIES} times on failure.
      */
     @Async("webhookExecutor")
     public void notify(String webhookUrl, SummaryResponse payload) {
@@ -40,27 +46,27 @@ public class WebhookService {
             return;
         }
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        HttpEntity<SummaryResponse> request = new HttpEntity<>(payload, headers);
-
-        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-            try {
-                restTemplate.postForEntity(webhookUrl, request, String.class);
-                log.info("Webhook delivered to {} (attempt {})", webhookUrl, attempt);
-                return;
-            } catch (Exception e) {
-                log.warn("Webhook attempt {}/{} failed for {}: {}", attempt, MAX_RETRIES, webhookUrl, e.getMessage());
-                if (attempt < MAX_RETRIES) {
-                    try { Thread.sleep(1000L * attempt); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
-                }
-            }
-        }
-        log.error("Webhook delivery failed after {} attempts for {}", MAX_RETRIES, webhookUrl);
+        webClient.post()
+            .uri(webhookUrl)
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue(payload)
+            .retrieve()
+            .toBodilessEntity()
+            .retryWhen(Retry.fixedDelay(MAX_RETRIES - 1, RETRY_DELAY)
+                .doBeforeRetry(signal -> log.warn(
+                    "Webhook retry {}/{} for {} — previous error: {}",
+                    signal.totalRetries() + 1, MAX_RETRIES,
+                    webhookUrl, signal.failure().getMessage())))
+            .subscribe(
+                response -> log.info("Webhook delivered to {} — HTTP {}",
+                    webhookUrl, response.getStatusCode()),
+                error -> log.error("Webhook delivery failed after {} attempts for {}: {}",
+                    MAX_RETRIES, webhookUrl, error.getMessage())
+            );
     }
 
     /**
-     * Basic SSRF guard: must be http/https, must not target private/loopback addresses.
+     * Basic SSRF guard: must be http/https and must not target private/loopback addresses.
      */
     private void validateUrl(String url) {
         URI uri;

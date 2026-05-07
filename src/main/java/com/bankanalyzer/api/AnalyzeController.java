@@ -1,7 +1,9 @@
 package com.bankanalyzer.api;
 
 import com.bankanalyzer.analyzer.TransactionAnalyzer;
+import com.bankanalyzer.api.contract.AnalyzeApi;
 import com.bankanalyzer.api.dto.*;
+import com.bankanalyzer.model.JobStatus;
 import com.bankanalyzer.model.ParseResult;
 import com.bankanalyzer.model.Transaction;
 import com.bankanalyzer.model.entity.StatementUploadEntity;
@@ -20,33 +22,22 @@ import org.springframework.cache.CacheManager;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import reactor.core.publisher.Flux;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * REST API for bank statement analysis.
- *
- * Endpoints:
- *   GET  /api/health                        — health check
- *   POST /api/analyze/summary               — upload PDF → JSON summary (Feature 1)
- *   POST /api/analyze/report                — upload PDF → XLSX (Feature 1)
- *   POST /api/analyze/pdf-report            — upload PDF → PDF report (Feature 5)
- *   POST /api/analyze/raw-text              — upload PDF → raw text (debug)
- *   POST /api/analyze/multi/summary         — upload multiple PDFs → merged JSON summary (Feature 2)
- *   POST /api/analyze/multi/report          — upload multiple PDFs → merged XLSX (Feature 2)
- *   POST /api/analyze/submit                — async job submission (Feature 8)
- *   GET  /api/analyze/status/{jobId}        — async job polling (Feature 8)
- */
 @Slf4j
 @RestController
 @RequestMapping("/api")
-public class AnalyzeController {
+public class AnalyzeController implements AnalyzeApi {
 
     private static final String XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     private static final String PDF_MIME  = "application/pdf";
@@ -83,6 +74,7 @@ public class AnalyzeController {
 
     // ── Health ────────────────────────────────────────────────────────────────
 
+    @Override
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
         return ResponseEntity.ok(Map.of("status", "UP", "service", "bank-statement-analyzer"));
@@ -90,6 +82,7 @@ public class AnalyzeController {
 
     // ── Single-file summary ───────────────────────────────────────────────────
 
+    @Override
     @PostMapping(value = "/analyze/summary", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<SummaryResponse> getSummary(
             @RequestParam("file") MultipartFile file,
@@ -137,6 +130,7 @@ public class AnalyzeController {
 
     // ── Single-file XLSX report ───────────────────────────────────────────────
 
+    @Override
     @PostMapping(value = "/analyze/report", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public void downloadReport(@RequestParam("file") MultipartFile file,
                                 HttpServletResponse response) throws IOException {
@@ -169,8 +163,9 @@ public class AnalyzeController {
             resolveFilename(file.getOriginalFilename(), "_report.xlsx"), xlsxBytes);
     }
 
-    // ── Single-file PDF report (Feature 5) ───────────────────────────────────
+    // ── Single-file PDF report ────────────────────────────────────────────────
 
+    @Override
     @PostMapping(value = "/analyze/pdf-report", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public void downloadPdfReport(@RequestParam("file") MultipartFile file,
                                    HttpServletResponse response) throws IOException {
@@ -196,8 +191,9 @@ public class AnalyzeController {
             resolveFilename(file.getOriginalFilename(), "_report.pdf"), pdfBytes);
     }
 
-    // ── Multi-file summary (Feature 2) ────────────────────────────────────────
+    // ── Multi-file summary ────────────────────────────────────────────────────
 
+    @Override
     @PostMapping(value = "/analyze/multi/summary", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<SummaryResponse> getMultiSummary(
             @RequestParam("files") List<MultipartFile> files,
@@ -222,7 +218,6 @@ public class AnalyzeController {
                 file.getOriginalFilename(), parsed.getBankName(), enriched.size());
         }
 
-        // Sort merged transactions chronologically
         allTransactions.sort(Comparator.comparing(t -> t.getDate() != null ? t.getDate()
             : java.time.LocalDate.MIN));
 
@@ -238,8 +233,9 @@ public class AnalyzeController {
         return ResponseEntity.ok(summary);
     }
 
-    // ── Multi-file XLSX report (Feature 2) ───────────────────────────────────
+    // ── Multi-file XLSX report ────────────────────────────────────────────────
 
+    @Override
     @PostMapping(value = "/analyze/multi/report", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public void downloadMultiReport(@RequestParam("files") List<MultipartFile> files,
                                      HttpServletResponse response) throws IOException {
@@ -262,6 +258,7 @@ public class AnalyzeController {
 
     // ── Raw text (debug) ──────────────────────────────────────────────────────
 
+    @Override
     @PostMapping(value = "/analyze/raw-text", consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
                  produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> getRawText(@RequestParam("file") MultipartFile file)
@@ -270,8 +267,9 @@ public class AnalyzeController {
         return ResponseEntity.ok(parser.extractRawText(new ByteArrayInputStream(file.getBytes())));
     }
 
-    // ── Async submit (Feature 8) ──────────────────────────────────────────────
+    // ── Async submit ──────────────────────────────────────────────────────────
 
+    @Override
     @PostMapping(value = "/analyze/submit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<SubmitJobResponse> submitJob(
             @RequestParam("file") MultipartFile file,
@@ -288,17 +286,36 @@ public class AnalyzeController {
         return ResponseEntity.accepted().body(resp);
     }
 
-    // ── Async status poll (Feature 8) ─────────────────────────────────────────
+    // ── Async status poll ─────────────────────────────────────────────────────
 
+    @Override
     @GetMapping("/analyze/status/{jobId}")
     public ResponseEntity<JobStatusResponse> getJobStatus(@PathVariable String jobId) {
         JobStatusResponse resp = asyncJobService.getStatus(jobId);
         HttpStatus status = switch (resp.getStatus()) {
             case DONE    -> HttpStatus.OK;
             case FAILED  -> HttpStatus.INTERNAL_SERVER_ERROR;
-            default      -> HttpStatus.ACCEPTED;  // PENDING / PROCESSING
+            default      -> HttpStatus.ACCEPTED;
         };
         return ResponseEntity.status(status).body(resp);
+    }
+
+    // ── SSE job stream ────────────────────────────────────────────────────────
+
+    @Override
+    @GetMapping(value = "/analyze/stream/{jobId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<JobStatusResponse>> streamJobStatus(@PathVariable String jobId) {
+        return Flux.interval(Duration.ofSeconds(1))
+            .map(tick -> asyncJobService.getStatus(jobId))
+            .takeUntil(status ->
+                status.getStatus() == JobStatus.DONE ||
+                status.getStatus() == JobStatus.FAILED)
+            .map(status -> ServerSentEvent.<JobStatusResponse>builder()
+                .id(String.valueOf(System.currentTimeMillis()))
+                .event(status.getStatus().name().toLowerCase())
+                .data(status)
+                .build())
+            .timeout(Duration.ofMinutes(5));
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

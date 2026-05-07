@@ -1,0 +1,173 @@
+{
+  "title": "Bank Statement Analyzer",
+  "uid": "bank-analyzer",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Audit Trail — Successful Analyses",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 7 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{app=\"bank-analyzer\"} |= \"AUDIT\"",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Slow Operations (> 500ms)",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 7, "w": 24, "h": 7 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{app=\"bank-analyzer\"} |= \"SLOW\"",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Analysis Count (last 1h)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 14, "w": 6, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "count_over_time({app=\"bank-analyzer\"} |= \"AUDIT\" [1h])",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "displayName": "Analyses"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Slow Operations Count (last 1h)",
+      "type": "stat",
+      "gridPos": { "x": 6, "y": 14, "w": 6, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "count_over_time({app=\"bank-analyzer\"} |= \"SLOW\" [1h])",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "unit": "short",
+          "displayName": "Slow Ops"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Errors (last 1h)",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 14, "w": 6, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "count_over_time({app=\"bank-analyzer\", level=\"ERROR\"} [1h])",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "unit": "short",
+          "displayName": "Errors"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Log Volume Over Time",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 7 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(rate({app=\"bank-analyzer\"}[1m])) by (level)",
+          "legendFormat": "{{level}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 7,
+      "title": "All Logs",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 25, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{app=\"bank-analyzer\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Bank Statement Analyzer
 
-A Spring Boot REST API that parses Indian bank statement PDFs, extracts customer and account details from the PDF header, enriches transactions with payment mode, merchant, and category detection, and produces structured JSON summaries or downloadable Excel/PDF reports.
+A Spring Boot REST API that parses Indian bank statement PDFs, extracts customer and account details from the PDF header, enriches transactions with payment mode, merchant, and category detection, and produces structured JSON summaries, spending analytics, inflation-adjusted forecasts, financial productivity insights, and downloadable Excel/PDF reports.
 
 ---
 
@@ -16,12 +16,16 @@ A Spring Boot REST API that parses Indian bank statement PDFs, extracts customer
   - [Duplicate Transaction Detection](#duplicate-transaction-detection)
   - [Category Tagging](#category-tagging)
   - [Spending Insights](#spending-insights)
+  - [Spending Analytics API](#spending-analytics-api)
   - [PDF Report Output](#pdf-report-output)
   - [Persistence (PostgreSQL)](#persistence-postgresql)
   - [Webhook / Callback](#webhook--callback)
   - [Async Processing & Job Polling](#async-processing--job-polling)
   - [File Deduplication](#file-deduplication)
 - [API Reference](#api-reference)
+  - [Analysis Endpoints](#analysis-endpoints)
+  - [Spending Analytics Endpoints](#spending-analytics-endpoints)
+- [Swagger UI](#swagger-ui)
 - [Rate Limiting](#rate-limiting)
 - [Caching](#caching)
 - [Configuration Reference](#configuration-reference)
@@ -44,6 +48,7 @@ A Spring Boot REST API that parses Indian bank statement PDFs, extracts customer
 | Async Processing | `CompletableFuture` + `@Async` | Background job processing with status polling |
 | Persistence | Spring Data JPA + PostgreSQL | Store uploads and transactions (optional, toggle-based) |
 | DB Migration | Flyway | Schema versioning, runs automatically on startup |
+| API Docs | SpringDoc OpenAPI 2.5 (Swagger UI) | Interactive API docs at `/swagger-ui.html` |
 | Boilerplate | Lombok | `@Slf4j`, `@Builder`, `@Data` annotations |
 | Build | Maven 3.9 | Dependency management, fat jar packaging |
 | Container | Docker (multi-stage, Alpine) | Lightweight production image (~180 MB) |
@@ -54,40 +59,37 @@ A Spring Boot REST API that parses Indian bank statement PDFs, extracts customer
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                          Client (curl / UI)                              │
+│                          Client (curl / Swagger UI)                      │
 └──────────────────────────────┬───────────────────────────────────────────┘
                                │  HTTP POST multipart/form-data
                                ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                        Spring Boot Application                           │
 │                                                                          │
-│  ┌──────────────────┐    ┌────────────────────┐    ┌─────────────────┐  │
-│  │  RateLimitFilter │───▶│  AnalyzeController │───▶│  Cache          │  │
-│  │  (Bucket4j/IP)   │    │  /api/analyze/*    │    │  (Caffeine)     │  │
-│  └──────────────────┘    └─────────┬──────────┘    └─────────────────┘  │
-│                                    │                                     │
-│          ┌─────────────────────────┼────────────────────────┐           │
-│          ▼                         ▼                        ▼           │
-│ ┌──────────────────┐  ┌──────────────────────┐  ┌──────────────────┐   │
-│ │ BankStatement    │  │  TransactionAnalyzer  │  │  InsightService  │   │
-│ │ Parser           │  │  - detectPaymentMode  │  │  - highestSpend  │   │
-│ │ (Orchestrator)   │  │  - extractMerchant    │  │  - recurring     │   │
-│ └────────┬─────────┘  │  - categorize         │  │  - unusual txns  │   │
-│          │            └──────────────────────┘  └──────────────────┘   │
-│ ┌────────▼─────────┐                                                    │
-│ │ BankParser       │  ┌──────────────────────┐  ┌──────────────────┐   │
-│ │ Registry         │  │  DuplicateDetector   │  │  SummaryBuilder  │   │
-│ │ (auto-detect)    │  │  (Feature 3)         │  │  (shared logic)  │   │
-│ └────────┬─────────┘  └──────────────────────┘  └──────────────────┘   │
-│  ┌───────┼──────┐                                                        │
-│  ▼       ▼      ▼      ┌───────────────┐  ┌──────────────────────────┐  │
-│ IciciCC SBI Generic    │ AsyncJobService│  │ PersistenceGateway       │  │
-│ Parser Parser Parser   │ (Feature 8)   │  │ (toggle: NoOp / Postgres)│  │
-│                        └───────────────┘  └──────────────────────────┘  │
-│  ┌──────────────────────┐  ┌──────────────────────────────────────────┐  │
-│  │ PdfReportGenerator   │  │  ExcelReportGenerator (Apache POI)       │  │
-│  │ (OpenPDF, Feature 5) │  │  4 sheets: Txns / Mode / Merchant / Month│  │
-│  └──────────────────────┘  └──────────────────────────────────────────┘  │
+│  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────────┐ │
+│  │  RateLimitFilter │─▶│ AnalyzeController  │  │  SpendingController  │ │
+│  │  (Bucket4j/IP)   │  │  /api/analyze/*    │  │  /api/spending/*     │ │
+│  └──────────────────┘  └────────┬───────────┘  └──────────┬───────────┘ │
+│                                 │                          │             │
+│         ┌───────────────────────┼──────────────────────────┤            │
+│         ▼                       ▼                          ▼            │
+│ ┌──────────────┐   ┌─────────────────────┐  ┌───────────────────────┐  │
+│ │ BankStatement│   │ TransactionAnalyzer │  │ SpendingAnalytics     │  │
+│ │ Parser       │   │ - detectPaymentMode │  │ Service               │  │
+│ │ (Orchestrator│   │ - extractMerchant   │  │ - buildCategorySpend  │  │
+│ └──────┬───────┘   │ - categorize        │  │ - buildProductivity   │  │
+│        │           └─────────────────────┘  └──────────┬────────────┘  │
+│ ┌──────▼───────┐                                        │               │
+│ │ BankParser   │   ┌─────────────────────┐  ┌──────────▼────────────┐  │
+│ │ Registry     │   │  InsightService     │  │ ForecastService       │  │
+│ │ (auto-detect)│   │  DuplicateDetector  │  │ - linearRegression    │  │
+│ └──────┬───────┘   │  SummaryBuilder     │  │ - inflationProject    │  │
+│  ┌─────┼─────┐     └─────────────────────┘  └───────────────────────┘  │
+│  ▼     ▼     ▼                                                           │
+│ ICICI SBI Generic  ┌───────────────┐  ┌──────────────────────────────┐  │
+│ Parsers            │ AsyncJobSvc   │  │ PersistenceGateway           │  │
+│                    │ (F8)          │  │ (NoOp / PostgreSQL)          │  │
+│                    └───────────────┘  └──────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,17 +99,18 @@ A Spring Boot REST API that parses Indian bank statement PDFs, extracts customer
 |---|---|
 | `RateLimitFilter` | Per-IP token bucket; blocks request with 429 before controller |
 | `AnalyzeController` | Validates file, checks dedup + cache, orchestrates full pipeline |
+| `SpendingController` | Routes to analytics / forecast / productivity services |
 | `BankStatementParser` | PDFBox text extraction, sanitization, dispatches to correct parser |
 | `BankParserRegistry` | Auto-detects bank format via `supports()` in `@Order` sequence |
-| `BankParser.extractCustomerDetails()` | Each parser extracts name, account number, branch, IFSC, PAN, etc. from the PDF header |
 | `TransactionAnalyzer` | Enriches transactions — payment mode, merchant, category |
+| `SpendingAnalyticsService` | Category grouping, trend calculation, 50/30/20 analysis |
+| `ForecastService` | Linear regression + inflation-adjusted 3-scenario projection |
 | `InsightService` | Computes spending insights — highest spend, recurring, unusual |
-| `DuplicateDetector` | Groups transactions by (desc + debit + credit) key; finds duplicates |
-| `SummaryBuilder` | Shared summary-building logic used by both sync and async paths |
-| `AsyncJobService` | Submits analysis jobs, tracks status in-memory, cleans up expired jobs |
+| `DuplicateDetector` | Groups transactions by (desc + debit + credit) key |
+| `AsyncJobService` | Submits analysis jobs, tracks status in-memory |
 | `PersistenceGateway` | Interface — routes to real DB or no-op depending on toggle |
 | `WebhookService` | Async HTTP POST of results to caller-provided URL |
-| `ExcelReportGenerator` | Writes 4-sheet `.xlsx` report using Apache POI |
+| `ExcelReportGenerator` | Writes 5-sheet `.xlsx` report using Apache POI |
 | `PdfReportGenerator` | Writes multi-section `.pdf` report using OpenPDF |
 
 ---
@@ -123,11 +126,21 @@ com.bankanalyzer
 │
 ├── api/
 │   ├── AnalyzeController.java          9 REST endpoints (single, multi, async, pdf-report)
+│   ├── SpendingController.java         3 REST endpoints (categories, forecast, productivity)
 │   ├── GlobalExceptionHandler.java     @ControllerAdvice — 4xx/5xx handling
 │   └── dto/
-│       ├── SummaryResponse.java        uploadId, detectedBank(s), insights, duplicates, customerDetails, ...
-│       ├── CustomerDetails.java        19-field header extraction: name, account, branch, IFSC, PAN, ...
+│       ├── SummaryResponse.java        uploadId, detectedBank(s), insights, duplicates, customerDetails
+│       ├── CustomerDetails.java        19-field header extraction: name, account, branch, IFSC, PAN
 │       ├── SpendingInsights.java       highestSpend, averageMonthly, recurring, unusual
+│       ├── CategorySpendingResponse.java  food, hotelAndMerchant, entertainment, travel groups
+│       ├── CategoryDetail.java         totalSpend, %, trend, monthly breakdown, top merchants
+│       ├── MonthlySpend.java           month + amount + MoM change
+│       ├── SpendingForecastResponse.java  annualInflationRate, forecastMonths, per-category forecasts
+│       ├── CategoryForecast.java       historicalAvg, slope, 3-scenario totals, projections list
+│       ├── MonthlyProjection.java      conservative / baseline / pessimistic per future month
+│       ├── ProductivityInsightsResponse.java  health score, 50/30/20, recommendations
+│       ├── BudgetRuleAnalysis.java     needs/wants/savings vs 50/30/20 benchmark
+│       ├── SpendingRecommendation.java priority, action, message, savings potential
 │       ├── DuplicateGroup.java         description, debit, credit, count, occurrenceDates (F3)
 │       ├── SubmitJobResponse.java      jobId, statusUrl, message (Feature 8)
 │       ├── JobStatusResponse.java      jobId, status, result, error, timestamps (Feature 8)
@@ -138,7 +151,7 @@ com.bankanalyzer
 │       └── MonthSummary.java
 │
 ├── parser/
-│   ├── BankParser.java                 Strategy interface (bankName, statementType, supports, parse, extractCustomerDetails)
+│   ├── BankParser.java                 Strategy interface
 │   ├── AbstractBankParser.java         Shared utilities (date/amount parsing, SKIP_PATTERN)
 │   ├── BankParserRegistry.java         Factory — resolves parser via supports()
 │   ├── BankStatementParser.java        Orchestrator — PDF → text → ParseResult
@@ -154,16 +167,18 @@ com.bankanalyzer
 ├── service/
 │   ├── CategoryTagger.java             100+ keyword → Category map (@Cacheable)
 │   ├── InsightService.java             Highest spend, recurring, unusual transaction detection
-│   ├── DuplicateDetector.java          Groups by (desc+debit+credit) key; returns DuplicateGroup list (F3)
-│   ├── SummaryBuilder.java             Shared buildSummary logic (used by sync + async paths)
-│   ├── AsyncJobService.java            ConcurrentHashMap job store, @Async processing, @Scheduled cleanup (F8)
+│   ├── DuplicateDetector.java          Groups by (desc+debit+credit); returns DuplicateGroup list
+│   ├── SummaryBuilder.java             Shared buildSummary logic (sync + async paths)
+│   ├── SpendingAnalyticsService.java   Category grouping, trend, 50/30/20 budget rule
+│   ├── ForecastService.java            Linear regression + inflation projection (3 scenarios)
+│   ├── AsyncJobService.java            ConcurrentHashMap job store, @Async, @Scheduled cleanup
 │   ├── PersistenceGateway.java         Interface — findDuplicate / save
 │   ├── NoOpPersistenceGateway.java     Active when persistence.enabled=false (default)
 │   ├── StatementPersistenceService.java Active when persistence.enabled=true
 │   └── WebhookService.java             Async HTTP POST with 3-retry + SSRF guard
 │
 ├── report/
-│   ├── ExcelReportGenerator.java       4-sheet XLSX writer (Apache POI)
+│   ├── ExcelReportGenerator.java       5-sheet XLSX writer (Apache POI)
 │   └── PdfReportGenerator.java         6-section PDF writer (OpenPDF) — Feature 5
 │
 ├── model/
@@ -171,8 +186,8 @@ com.bankanalyzer
 │   ├── ParseResult.java                Parser output — transactions + bankName + statementType + customerDetails
 │   ├── PaymentMode.java                UPI, NEFT, RTGS, IMPS, ATM, CARD_POS, CHEQUE, ECS_NACH, OTHER
 │   ├── StatementType.java              SAVINGS_ACCOUNT, CURRENT_ACCOUNT, CREDIT_CARD
-│   ├── JobStatus.java                  PENDING, PROCESSING, DONE, FAILED (Feature 8)
-│   ├── Category.java                   FOOD_DINING, SHOPPING, FUEL, TRAVEL, HEALTH, ... (14 total)
+│   ├── JobStatus.java                  PENDING, PROCESSING, DONE, FAILED
+│   ├── Category.java                   FOOD_DINING, SHOPPING, FUEL, TRAVEL, HEALTH ... (14 total)
 │   └── entity/
 │       ├── StatementUploadEntity.java  JPA: statement_uploads table
 │       └── TransactionEntity.java      JPA: transactions table
@@ -182,6 +197,7 @@ com.bankanalyzer
 │   └── TransactionRepository.java
 │
 ├── config/
+│   ├── OpenApiConfig.java              SpringDoc OpenAPI bean — tags, info, server URLs
 │   ├── CacheConfig.java                Caffeine: paymentMode, merchant, category, analysis caches
 │   ├── PersistenceConfig.java          Conditional JPA/Flyway/DataSource (@ConditionalOnProperty)
 │   ├── AsyncConfig.java                Webhook + job thread pool + RestTemplate bean
@@ -196,37 +212,21 @@ com.bankanalyzer
 
 ```
 BankParser (interface)
-    │  bankName(), statementType(), supports(), parse()
-    │  extractCustomerDetails()  ← default impl returns empty; overridden by each concrete parser
-    └── AbstractBankParser (abstract — shared utilities: parseDate, parseAmount, SKIP_PATTERN)
-            ├── IciciCreditCardParser  (overrides extractCustomerDetails)
-            ├── IciciSavingsParser     (overrides extractCustomerDetails)
-            ├── SbiParser              (overrides extractCustomerDetails — 19 fields)
-            └── GenericBankParser (fallback — uses default empty CustomerDetails)
+    └── AbstractBankParser (abstract — shared utilities)
+            ├── IciciCreditCardParser
+            ├── IciciSavingsParser
+            ├── SbiParser
+            └── GenericBankParser (fallback)
 
 PersistenceGateway (interface)
     ├── NoOpPersistenceGateway      @ConditionalOnProperty(persistence.enabled=false)
     └── StatementPersistenceService @ConditionalOnProperty(persistence.enabled=true)
 
-SummaryBuilder  ──▶ TransactionAnalyzer
-                ──▶ InsightService
-                ──▶ DuplicateDetector
+SpendingController ──▶ SpendingAnalyticsService ──▶ TransactionAnalyzer
+                   ──▶ ForecastService          ──▶ SpendingAnalyticsService
 
-AsyncJobService ──▶ BankStatementParser
-                ──▶ TransactionAnalyzer
-                ──▶ SummaryBuilder
-                ──▶ PersistenceGateway
-
-AnalyzeController
-    ├── BankStatementParser ──▶ BankParserRegistry ──▶ List<BankParser>
-    ├── TransactionAnalyzer ──▶ CategoryTagger
-    ├── SummaryBuilder      ──▶ InsightService, DuplicateDetector
-    ├── AsyncJobService
-    ├── ExcelReportGenerator
-    ├── PdfReportGenerator
-    ├── PersistenceGateway  (injected — either NoOp or real)
-    ├── WebhookService
-    └── CacheManager (Caffeine)
+SummaryBuilder  ──▶ TransactionAnalyzer, InsightService, DuplicateDetector
+AsyncJobService ──▶ BankStatementParser, TransactionAnalyzer, SummaryBuilder
 ```
 
 ### Transaction Model
@@ -245,105 +245,84 @@ Transaction
 
 ### Supported Bank Formats
 
-| Parser | Statement Type | Date Format | Detection Keywords | Customer Fields Extracted |
+| Parser | Statement Type | Date Format | Detection Keywords | Customer Fields |
 |---|---|---|---|---|
 | `IciciCreditCardParser` | Credit Card | `DD-MMM-YY` | `ICICI` + `Credit Card` | Name, account, statement period, closing balance |
 | `IciciSavingsParser` | Savings Account | `DD/MM/YYYY` | `ICICI` (no CC keyword) | Name, account, branch, IFSC, statement period |
-| `SbiParser` | Savings Account | `DD/MM/YYYY DD/MM/YYYY` | `State Bank of India`, `SBIN` | 19 fields — name, account, branch, IFSC, MICR, CIF, PAN, email, mobile, KYC status, segment, account status, open date, statement period, closing balance, currency, nominee |
-| `GenericBankParser` | Savings Account | `DD/MM/YYYY`, `DD-MM-YYYY`, `DD MMM YYYY` | fallback — always matches | None (empty `CustomerDetails`) |
+| `SbiParser` | Savings Account | `DD/MM/YYYY DD/MM/YYYY` | `State Bank of India`, `SBIN` | 19 fields — name, account, branch, IFSC, MICR, CIF, PAN, email, mobile, KYC |
+| `GenericBankParser` | Savings Account | `DD/MM/YYYY`, `DD-MM-YYYY`, `DD MMM YYYY` | fallback — always matches | None |
 
 ---
 
 ## Flow Diagram
 
 ```
-POST /api/analyze/summary?webhookUrl=...
-              │
-              ▼
-   ┌─────────────────────┐
-   │   RateLimitFilter   │──── 429 Too Many Requests (if IP exhausted)
-   └────────┬────────────┘
-            │ token consumed
-            ▼
-   ┌─────────────────────┐
-   │  AnalyzeController  │
-   │  read file bytes    │
-   │  compute MD5 hash   │
-   └────────┬────────────┘
-            │
-            ▼
-   ┌─────────────────────┐        ┌──────────────────────────────┐
-   │  Dedup check        │──HIT──▶│  409 Conflict                │
-   │  PersistenceGateway │        │  { uploadId, detectedBank }  │
-   │  findDuplicate()    │        └──────────────────────────────┘
-   └────────┬────────────┘
-            │ no duplicate
-            ▼
-   ┌─────────────────────┐        ┌──────────────────────────────┐
-   │   Cache lookup      │──HIT──▶│  Return cached result        │
-   │   (hash:summary)    │        │  (skip all processing)       │
-   └────────┬────────────┘        └──────────────────────────────┘
-            │ MISS
-            ▼
-   ┌─────────────────────┐
-   │ BankStatementParser │
-   │  PDFBox extract     │
-   │  sanitize()         │
-   │  → ParseResult      │
-   └────────┬────────────┘
-            │ (bankName, statementType, raw transactions)
-            ▼
-   ┌─────────────────────┐
-   │ BankParserRegistry  │
-   │  supports() check   │──── first @Order match wins
-   └────────┬────────────┘
-            │ selected parser
-            ▼
-   ┌─────────────────────┐
-   │  BankParser.parse() │
-   │  regex line-by-line │
-   │  multi-line desc    │
-   └────────┬────────────┘
-            │ List<Transaction>
-            ▼
-   ┌──────────────────────────┐
-   │  extractCustomerDetails()│
-   │  regex on PDF header     │
-   │  → CustomerDetails       │
-   └────────┬─────────────────┘
-            │ name, account, branch, IFSC, PAN, ...
-            ▼
-   ┌──────────────────────────┐
-   │   TransactionAnalyzer    │
-   │  detectPaymentMode() ◀───── @Cacheable("paymentMode")
-   │  extractMerchant()   ◀───── @Cacheable("merchant")
-   │  categorize()        ◀───── @Cacheable("category")
-   └────────┬─────────────────┘
-            │ enriched transactions
-            ▼
-   ┌─────────────────────┐
-   │   InsightService    │
-   │  highestSpendDay    │
-   │  recurringTxns      │
-   │  unusualTxns (2σ)   │
-   └────────┬────────────┘
-            │ SpendingInsights
-            ▼
-   ┌─────────────────────┐
-   │  PersistenceGateway │──── NoOp (disabled) or PostgreSQL (enabled)
-   │  save(upload + txns)│
-   └────────┬────────────┘
-            │ uploadId (or null if disabled)
-            ▼
-   ┌─────────────────────┐
-   │  cache.put(hash,    │
-   │    result)          │
-   └────────┬────────────┘
-            │
-     ┌──────┴──────────────┐
-     ▼                     ▼
-  JSON Summary          XLSX Report       ──── WebhookService.notify() [async]
-  (with insights)       (POI, 4 sheets)
+POST /api/analyze/summary
+         │
+         ▼
+┌─────────────────────┐
+│   RateLimitFilter   │──── 429 Too Many Requests
+└────────┬────────────┘
+         ▼
+┌─────────────────────┐
+│  AnalyzeController  │─── MD5 hash of file bytes
+└────────┬────────────┘
+         ▼
+┌─────────────────────┐     ┌──────────────────────────┐
+│  Dedup check        │─HIT▶│  409 Conflict            │
+└────────┬────────────┘     └──────────────────────────┘
+         ▼
+┌─────────────────────┐     ┌──────────────────────────┐
+│   Cache lookup      │─HIT▶│  Return cached result    │
+└────────┬────────────┘     └──────────────────────────┘
+         │ MISS
+         ▼
+┌─────────────────────┐
+│ BankStatementParser │──── PDFBox extract → sanitize → ParseResult
+└────────┬────────────┘
+         ▼
+┌─────────────────────┐
+│  TransactionAnalyzer│──── paymentMode, merchant, category (@Cacheable)
+└────────┬────────────┘
+         ▼
+┌─────────────────────┐
+│  InsightService     │──── highest spend, recurring, unusual (2σ)
+└────────┬────────────┘
+         ▼
+┌─────────────────────┐
+│  PersistenceGateway │──── NoOp (disabled) or PostgreSQL (enabled)
+└────────┬────────────┘
+         ▼
+     JSON / XLSX / PDF response    +    WebhookService.notify() [async]
+
+
+POST /api/spending/categories  (or /forecast or /productivity)
+         │
+         ▼
+┌─────────────────────┐
+│  SpendingController │
+└────────┬────────────┘
+         ▼
+┌───────────────────────────────┐
+│  BankStatementParser          │──── same PDF parsing pipeline
+│  TransactionAnalyzer          │
+└────────┬──────────────────────┘
+         ▼
+┌─────────────────────────────────────────────────────┐
+│  SpendingAnalyticsService                           │
+│  - group by FOOD/HOTEL/ENTERTAINMENT/TRAVEL         │
+│  - monthly breakdown + linear regression slope      │
+│  - 50/30/20 rule + health score + recommendations   │
+└────────┬────────────────────────────────────────────┘
+         │  (only for /forecast)
+         ▼
+┌─────────────────────────────────────────────────────┐
+│  ForecastService                                    │
+│  - inflation compound: (1 + r)^(1/12) − 1          │
+│  - conservative = avg × 0.9 × inflationFactor^k    │
+│  - baseline    = avg × inflationFactor^k            │
+│  - pessimistic = regression trend × inflationFactor^k│
+└─────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -351,25 +330,23 @@ POST /api/analyze/summary?webhookUrl=...
 ## Design Patterns
 
 ### Strategy + Registry (Parser)
-`BankParser` is a strategy interface. `BankParserRegistry` holds all `BankParser` beans (Spring-injected in `@Order` sequence) and resolves the correct one by calling `supports()` on each.
-
-**Benefit:** Adding a new bank = one new `@Component` class. Zero changes to existing code (Open/Closed Principle).
+`BankParser` is a strategy interface. `BankParserRegistry` resolves the correct implementation via `@Order`-sorted `supports()` calls.
 
 ### Template Method (Abstract Parser)
-`AbstractBankParser` provides shared utilities (`parseDate`, `parseAmount`, `buildDebitCreditTransaction`, `SKIP_PATTERN`). Concrete parsers only implement `supports()`, `parse()`, and `bankName()`.
+`AbstractBankParser` provides shared utilities. Concrete parsers only implement `supports()`, `parse()`, and `bankName()`.
 
 ### Strategy (Persistence Toggle)
-`PersistenceGateway` is a strategy interface with two implementations conditionally registered via `@ConditionalOnProperty`. The controller injects the interface and has no knowledge of which is active.
+`PersistenceGateway` interface with two implementations selected by `@ConditionalOnProperty`.
 
 ```
-persistence.enabled=false  →  NoOpPersistenceGateway    (default, no DB needed)
+persistence.enabled=false  →  NoOpPersistenceGateway    (default)
 persistence.enabled=true   →  StatementPersistenceService (PostgreSQL)
 ```
 
 ### Filter Chain (Rate Limiting)
 `RateLimitFilter` extends `OncePerRequestFilter` and runs before any controller logic.
 
-### Cache-Aside (3 levels)
+### Cache-Aside
 | Level | Where | Key |
 |---|---|---|
 | Method | `detectPaymentMode`, `extractMerchant`, `categorize` | description string |
@@ -381,151 +358,71 @@ persistence.enabled=true   →  StatementPersistenceService (PostgreSQL)
 
 ### Customer Details Extraction
 
-Every `/api/analyze/summary` response includes a `customerDetails` object populated from the PDF header — no manual input required.
-
-**How it works:**
-1. `BankStatementParser` extracts the raw text via PDFBox, then calls `parser.extractCustomerDetails(rawText)`
-2. Each concrete `BankParser` overrides `extractCustomerDetails()` and uses bank-specific regex patterns to pull fields from the statement header
-3. The resulting `CustomerDetails` object is stored in `ParseResult` and flows into the JSON summary, XLSX report (first sheet), and PDF report (header grid)
+Every `/api/analyze/summary` response includes a `customerDetails` object.
 
 **SBI — 19 extracted fields:**
 
-| Field | Source pattern |
+| Field | Source |
 |---|---|
-| `customerName` | Title-prefixed name before `State Bank of India` on same line |
+| `customerName` | Title-prefixed name |
 | `accountNumber` | `Account Number : <digits>` |
-| `product` | `Product : <text>` |
-| `branch` | `Branch Name : <text>` |
-| `branchCode` | `Branch Code : <digits>` |
-| `ifscCode` | `IFSC Code : <alphanum>` |
-| `micrCode` | `MICR Code : <digits>` |
-| `cifNumber` | `CIF Number : <digits>` |
-| `email` | `Email ID <email>` |
-| `mobile` | `Mobile Number <digits>` |
+| `branch` / `branchCode` | `Branch Name / Code` |
+| `ifscCode` / `micrCode` | `IFSC Code / MICR Code` |
+| `cifNumber` | `CIF Number` |
+| `email` / `mobile` | `Email ID / Mobile Number` |
 | `pan` | `PAN <XXXXXNNNNX>` |
-| `kycStatus` | `KYC Status <word>` |
-| `segment` | `Segment <word>` |
-| `accountStatus` | `Account Status : <word>` |
-| `accountOpenDate` | `Account open Date : <DD/MM/YYYY>` |
+| `kycStatus` / `segment` | `KYC Status / Segment` |
+| `accountStatus` / `accountOpenDate` | `Account Status / Account open Date` |
 | `statementPeriod` | `Statement From : <date> to <date>` |
-| `statementDate` | `Date of Statement : <date>` |
-| `closingBalance` | `Clear Balance : <amount CR/DR>` |
-| `currency` | `Currency : <INR>` |
-| `nomineeNam` | `Nominee Name : <text>` |
-
-**JSON response example:**
-
-```json
-"customerDetails": {
-  "customerName": "Mr. Tejas Chandra Gowda",
-  "accountNumber": "12345678901",
-  "product": "Savings Account",
-  "branch": "Jayanagar Branch",
-  "branchCode": "01234",
-  "ifscCode": "SBIN0001234",
-  "micrCode": "560002001",
-  "cifNumber": "98765432",
-  "email": "tejas@example.com",
-  "mobile": "9876543210",
-  "pan": "ABCDE1234F",
-  "kycStatus": "KYC Done",
-  "segment": "General",
-  "accountStatus": "Regular",
-  "accountOpenDate": "01/04/2010",
-  "statementPeriod": "01/01/2024 to 31/03/2024",
-  "statementDate": "04-04-2026",
-  "closingBalance": "12,345.67CR",
-  "currency": "INR",
-  "nomineeNam": "Priya Gowda"
-}
-```
-
-Fields that cannot be found are omitted from the JSON (`@JsonInclude(NON_NULL)`).
-
-**In reports:**
-- **XLSX** — "Customer Details" is the first sheet, rendered as label-value rows with a blue-tinted header style
-- **PDF** — 4-column grid printed at the top of the report before the transactions table
+| `closingBalance` / `currency` | `Clear Balance / Currency` |
+| `nomineeNam` | `Nominee Name` |
 
 ---
 
 ### Multi-file Upload & Merge
 
-Upload up to **10 PDF statements at once** — from the same or different banks. All transactions are merged, enriched, deduplicated-detected, and returned as a single unified summary.
+Upload up to **10 PDF statements** at once. Transactions are merged, sorted chronologically, and returned as a single summary.
 
 ```bash
-# Merged JSON summary from 3 statements
-curl -F "files=@sbi_jan.pdf" -F "files=@icici_jan.pdf" -F "files=@hdfc_jan.pdf" \
-  http://localhost:8080/api/analyze/multi/summary
-
-# Merged XLSX report
 curl -F "files=@sbi_jan.pdf" -F "files=@icici_jan.pdf" \
-  http://localhost:8080/api/analyze/multi/report --output merged.xlsx
+  http://localhost:8080/api/analyze/multi/summary
 ```
-
-**Response extras (over single-file):**
-```json
-{
-  "detectedBank": "State Bank of India, ICICI Bank",
-  "detectedBanks": ["State Bank of India", "ICICI Bank"],
-  ...
-}
-```
-
-- Transactions from all files are sorted chronologically after merge
-- Each file is parsed independently using the correct bank parser (auto-detected)
-- `byMonth`, `byMerchant`, `insights`, and `duplicates` cover the full merged dataset
 
 ---
 
 ### Duplicate Transaction Detection
 
-Every `/api/analyze/summary` and `/api/analyze/multi/summary` response includes a `duplicates` field listing groups of transactions that appear more than once with the same description and amount.
-
-**Detection key:** `normalized_description | debit | credit`
-
-Transactions on different dates with the same key are flagged — this catches double-billing that spans days.
+Groups transactions by `normalized_description | debit | credit`. Catches double-billing across days.
 
 ```json
 "duplicates": [
-  {
-    "description": "UPI/Swiggy/Order payment",
-    "debit": 349.00,
-    "credit": 0.0,
-    "count": 3,
-    "occurrenceDates": ["2024-03-10", "2024-03-10", "2024-03-11"]
-  }
+  { "description": "UPI/Swiggy/Order", "debit": 349.00, "count": 3,
+    "occurrenceDates": ["2024-03-10", "2024-03-10", "2024-03-11"] }
 ]
 ```
-
-- `duplicates` is `null` in the response when no duplicates are found (`@JsonInclude(NON_NULL)`)
-- Also shown in the PDF report in a dedicated "Possible Duplicates" section
 
 ---
 
 ### Category Tagging
 
-Every transaction is automatically tagged with a spending category based on merchant/description keywords.
+14 categories with 100+ keywords matched against transaction descriptions.
 
-**14 categories:** `FOOD_DINING`, `GROCERIES`, `SHOPPING`, `FUEL`, `UTILITIES`, `HEALTH`, `ENTERTAINMENT`, `TRAVEL`, `EDUCATION`, `EMI_LOAN`, `INVESTMENT`, `SALARY_INCOME`, `TRANSFER`, `OTHER`
-
-**Sample keywords (100+ total):**
-
-| Category | Keywords |
+| Category | Sample Keywords |
 |---|---|
-| FOOD_DINING | Swiggy, Zomato, Domino, McDonald, Cafe, Restaurant |
-| TRAVEL | IRCTC, Ola, Uber, MakeMyTrip, IndiGo, Rapido |
-| SHOPPING | Amazon, Flipkart, Myntra, Meesho, Nykaa |
-| FUEL | HPCL, IOCL, BPCL, Reliance BP, Nayara |
-| UTILITIES | Airtel, Jio, Electricity, Broadband, DTH Recharge |
-| INVESTMENT | Zerodha, Groww, Mutual Fund, SIP, Kuvera |
-
-Category is returned in every transaction and stored in DB when persistence is enabled.
+| `FOOD_DINING` | Swiggy, Zomato, McDonald, Cafe, Restaurant, Hotel |
+| `TRAVEL` | IRCTC, Ola, Uber, MakeMyTrip, IndiGo, Rapido |
+| `SHOPPING` | Amazon, Flipkart, Myntra, Meesho, Nykaa |
+| `FUEL` | HPCL, IOCL, BPCL, Reliance BP, Nayara |
+| `UTILITIES` | Airtel, Jio, Electricity, Broadband, DTH |
+| `INVESTMENT` | Zerodha, Groww, Mutual Fund, SIP, Kuvera |
+| `ENTERTAINMENT` | Netflix, Spotify, BookMyShow, PVR, Steam |
+| `HEALTH` | Apollo, MedPlus, Practo, PharmEasy, Hospital |
 
 ---
 
 ### Spending Insights
 
-Automatically computed and included in every `/api/analyze/summary` response under the `insights` field.
+Included in every `/api/analyze/summary` under `insights`:
 
 ```json
 "insights": {
@@ -535,160 +432,126 @@ Automatically computed and included in every `/api/analyze/summary` response und
   "highestSpendMonthAmount": 45230.00,
   "averageMonthlySpend": 32000.00,
   "recurringTransactions": [
-    { "merchantName": "Swiggy", "occurrences": 8, "averageAmount": 320.00, "totalAmount": 2560.00 }
+    { "merchantName": "Swiggy", "occurrences": 8, "averageAmount": 320.00 }
   ],
   "unusualTransactions": [
-    { "date": "2024-03-15", "description": "...", "merchantName": "Amazon", "amount": 15000.00 }
+    { "date": "2024-03-15", "merchantName": "Amazon", "amount": 15000.00 }
   ]
 }
 ```
 
-**How each insight is computed:**
-- **Highest spend day/month** — group debits by date/month, find max
-- **Average monthly spend** — total debits ÷ number of distinct months
-- **Recurring transactions** — merchants with ≥ 2 debit occurrences, sorted by frequency
-- **Unusual transactions** — debits above `mean + 2 × standard deviation`, top 10 shown
+**Detection:** recurring = ≥2 occurrences by merchant; unusual = debits above mean + 2σ.
+
+---
+
+### Spending Analytics API
+
+Three new endpoints under `/api/spending/` provide category-level spend data, future projections, and productivity recommendations.
+
+#### Category Groups
+
+| Group | Underlying Categories |
+|---|---|
+| Food & Groceries | `FOOD_DINING`, `GROCERIES` |
+| Hotel & Merchant | `SHOPPING` |
+| Entertainment | `ENTERTAINMENT` |
+| Travel & Fuel | `TRAVEL`, `FUEL` |
+
+#### Forecast Methodology
+
+```
+Monthly inflation rate:  r_m = (1 + annualRate/100)^(1/12) − 1
+
+Conservative (k):   avg × 0.90 × (1 + r_m)^k     ← spending-control goal
+Baseline (k):       avg        × (1 + r_m)^k     ← no behaviour change
+Pessimistic (k):    trend_k    × (1 + r_m)^k     ← regression extrapolation
+
+where trend_k = intercept + slope × (histLen + k − 1)
+```
+
+#### Financial Health Score (0–100)
+
+| Dimension | Max pts | Criteria |
+|---|---|---|
+| Savings rate | 40 | ≥30% = 40, ≥20% = 30, ≥10% = 20, ≥0% = 10 |
+| Discretionary control | 35 | Wants ≤25% = 35, ≤30% = 25, ≤40% = 15 |
+| Recommendation count | 25 | 0 recs = 25, ≤2 = 15, ≤4 = 8 |
+
+Ratings: **EXCELLENT** ≥80 / **GOOD** ≥60 / **FAIR** ≥40 / **NEEDS_ATTENTION** <40
+
+#### 50/30/20 Budget Rule
+
+| Bucket | Categories | Target |
+|---|---|---|
+| Needs | Utilities, EMI/Loans, Groceries, Health, Fuel | 50% |
+| Wants | Food/Dining, Entertainment, Shopping, Travel, Education | 30% |
+| Savings | Investment, SIP | 20% |
 
 ---
 
 ### PDF Report Output
-
-Download a formatted PDF report directly — no Excel required.
 
 ```bash
 curl -F "file=@statement.pdf" \
   http://localhost:8080/api/analyze/pdf-report --output report.pdf
 ```
 
-**PDF sections:**
-
-| Section | Content |
-|---|---|
-| Summary | Bank name, period, total debit/credit, transaction count |
-| All Transactions | Full table — date, description, mode, merchant, debit, credit |
-| Spend by Category | Debit totals per category (FOOD_DINING, TRAVEL, etc.) |
-| Spend by Payment Mode | Count + debit + credit per mode |
-| Monthly Breakdown | Month-by-month debit/credit counts and totals |
-| Duplicate Transactions | Only shown when duplicates are detected |
-
-- Built with **OpenPDF** (open-source fork of iText 2) — no licensing restrictions
-- Landscape A4, alternating row shading, header/footer with page numbers
-- Response is `Content-Type: application/pdf` with `Content-Disposition: attachment`
+Sections: Summary bar → Customer details → All transactions → By category → By payment mode → Monthly breakdown → Duplicates (if any).
 
 ---
 
 ### Async Processing & Job Polling
 
-For large statements or automated pipelines, submit a file asynchronously and poll for the result.
-
-**Step 1 — Submit:**
 ```bash
+# Submit
 curl -F "file=@statement.pdf" http://localhost:8080/api/analyze/submit
-```
-```json
-{
-  "jobId": "a3f4c7b2-...",
-  "statusUrl": "http://localhost:8080/api/analyze/status/a3f4c7b2-...",
-  "message": "Job accepted. Poll statusUrl for results."
-}
-```
-Returns `HTTP 202 Accepted` immediately.
+# → { "jobId": "a3f4c7b2-...", "statusUrl": "http://localhost:8080/api/analyze/status/a3f4c7b2-..." }
 
-**Step 2 — Poll:**
-```bash
+# Poll
 curl http://localhost:8080/api/analyze/status/a3f4c7b2-...
 ```
 
 | Status | HTTP | Meaning |
 |---|---|---|
-| `PENDING` | 202 | Queued, not started yet |
-| `PROCESSING` | 202 | Parse + analyze in progress |
-| `DONE` | 200 | Full `SummaryResponse` in `result` field |
-| `FAILED` | 500 | Error message in `error` field |
+| `PENDING` | 202 | Queued |
+| `PROCESSING` | 202 | In progress |
+| `DONE` | 200 | Full `SummaryResponse` in `result` |
+| `FAILED` | 500 | Error in `error` field |
 
-**Done response example:**
-```json
-{
-  "jobId": "a3f4c7b2-...",
-  "status": "DONE",
-  "submittedAt": "2024-04-01T10:00:00Z",
-  "completedAt": "2024-04-01T10:00:03Z",
-  "result": { ... full SummaryResponse ... }
-}
-```
-
-**Implementation details:**
-- Jobs stored in `ConcurrentHashMap` (in-memory; swap for Redis in multi-node deployments)
-- Processing runs on the shared `webhookExecutor` thread pool (`@Async`)
-- Jobs are purged automatically after **1 hour** via `@Scheduled` cleanup (runs every 5 minutes)
-- Polling for an expired/unknown jobId returns `FAILED` with a descriptive error
+Jobs auto-purged after **1 hour** via `@Scheduled` (runs every 5 min).
 
 ---
 
 ### Persistence (PostgreSQL)
 
-Disabled by default. Enable by setting `persistence.enabled=true` and providing DB credentials.
-
-#### Toggle
+Disabled by default.
 
 ```properties
-# Default — no DB connection attempted, app runs fully in-memory
-persistence.enabled=false
-
-# Enable — connects to PostgreSQL, runs Flyway migrations on startup
+# Enable
 persistence.enabled=true
 spring.datasource.url=jdbc:postgresql://localhost:5432/bankanalyzer
 spring.datasource.username=postgres
 spring.datasource.password=postgres
 ```
 
-#### How the toggle works
-
-| State | Active Bean | DB Connection | Dedup |
-|---|---|---|---|
-| `persistence.enabled=false` | `NoOpPersistenceGateway` | None | Disabled |
-| `persistence.enabled=true` | `StatementPersistenceService` | PostgreSQL | Active |
-
-When disabled, `BankAnalyzerApplication` excludes `DataSourceAutoConfiguration`, `HibernateJpaAutoConfiguration`, and `FlywayAutoConfiguration` — no datasource bean is ever created.
-
-#### Database Schema
-
+Schema (auto-created by Flyway):
 ```sql
-statement_uploads          -- one row per PDF upload
-  id, file_hash, original_filename, bank_name,
-  statement_type, transaction_count, uploaded_at
-
-transactions               -- one row per transaction
-  id, upload_id (FK), txn_date, description,
-  debit, credit, balance, payment_mode, merchant_name, category
-```
-
-Flyway runs `V1__init.sql` automatically on startup when persistence is enabled.
-
-#### Start PostgreSQL (Docker)
-
-```bash
-docker run -d -p 5432:5432 \
-  -e POSTGRES_DB=bankanalyzer \
-  -e POSTGRES_PASSWORD=postgres \
-  postgres:16
+statement_uploads  — id, file_hash, original_filename, bank_name, transaction_count, uploaded_at
+transactions       — id, upload_id, txn_date, description, debit, credit, payment_mode, category
 ```
 
 ---
 
 ### Webhook / Callback
 
-Pass an optional `webhookUrl` query parameter to receive results asynchronously after processing.
-
 ```bash
 curl -F "file=@statement.pdf" \
   "http://localhost:8080/api/analyze/summary?webhookUrl=https://your-server.com/callback"
 ```
 
-- Runs on a dedicated `webhook-` thread pool (`@Async`) — never blocks the HTTP response
-- POSTs the full `SummaryResponse` JSON to the callback URL
-- Retries up to **3 times** with exponential backoff (1s, 2s, 3s)
-- **SSRF guard** — rejects `localhost`, `127.x`, `10.x`, `192.168.x`, `172.16–31.x`
+- Async (`@Async`), does not block the HTTP response
+- 3 retries with exponential backoff (1s, 2s, 3s)
+- SSRF guard: blocks `localhost`, `127.x`, `10.x`, `192.168.x`, `172.16–31.x`
 
 ---
 
@@ -701,43 +564,28 @@ dedup.enabled=true
 dedup.window-hours=24
 ```
 
-If a duplicate is detected, the API returns `HTTP 409 Conflict`:
-
-```json
-{
-  "uploadId": 42,
-  "detectedBank": "State Bank of India",
-  "totalTransactions": 137
-}
-```
-
-Deduplication is keyed on **MD5 hash of the raw PDF bytes** — same file, same hash, rejected.
-
-> Deduplication is automatically disabled when `persistence.enabled=false` since there is no DB to check against.
+Returns `HTTP 409 Conflict` for duplicate uploads.
 
 ---
 
 ## API Reference
 
-### `GET /api/health`
-```json
-{ "status": "UP", "service": "bank-statement-analyzer" }
-```
+### Analysis Endpoints
 
-### `POST /api/analyze/summary`
+| Method | Endpoint | Returns | Description |
+|---|---|---|---|
+| `GET` | `/api/health` | JSON | Service health check |
+| `POST` | `/api/analyze/summary` | JSON | Full analysis of a single PDF |
+| `POST` | `/api/analyze/report` | XLSX | 5-sheet Excel report |
+| `POST` | `/api/analyze/pdf-report` | PDF | Formatted PDF report |
+| `POST` | `/api/analyze/raw-text` | Text | Raw PDFBox output (debug) |
+| `POST` | `/api/analyze/multi/summary` | JSON | Merged analysis of up to 10 PDFs |
+| `POST` | `/api/analyze/multi/report` | XLSX | Merged Excel report |
+| `POST` | `/api/analyze/submit` | JSON | Submit PDF for async processing (202) |
+| `GET` | `/api/analyze/status/{jobId}` | JSON | Poll async job status |
 
-Upload a PDF, get a full JSON breakdown including insights.
+#### `POST /api/analyze/summary` — Example response
 
-```bash
-# Basic
-curl -F "file=@statement.pdf" http://localhost:8080/api/analyze/summary
-
-# With webhook callback
-curl -F "file=@statement.pdf" \
-  "http://localhost:8080/api/analyze/summary?webhookUrl=https://example.com/cb"
-```
-
-**Response:**
 ```json
 {
   "uploadId": 7,
@@ -753,113 +601,174 @@ curl -F "file=@statement.pdf" \
     { "merchant": "Swiggy", "count": 5, "totalDebit": 1850.00 }
   ],
   "byMonth": [
-    { "month": "2024-04", "debitCount": 12, "totalDebit": 28000.00, "creditCount": 2, "totalCredit": 5000.00 }
+    { "month": "2024-04", "debitCount": 12, "totalDebit": 28000.00,
+      "creditCount": 2, "totalCredit": 5000.00 }
   ],
-  "insights": {
-    "highestSpendDay": "2024-04-15",
-    "highestSpendDayAmount": 4200.00,
-    "highestSpendMonth": "2024-04",
-    "highestSpendMonthAmount": 28000.00,
-    "averageMonthlySpend": 24500.00,
-    "recurringTransactions": [...],
-    "unusualTransactions": [...]
-  },
-  "customerDetails": {
-    "customerName": "Mr. Tejas Chandra Gowda",
-    "accountNumber": "12345678901",
-    "branch": "Jayanagar Branch",
-    "ifscCode": "SBIN0001234",
-    "pan": "ABCDE1234F",
-    "statementPeriod": "01/01/2024 to 31/03/2024",
-    "closingBalance": "12,345.67CR"
-  }
+  "insights": { ... },
+  "customerDetails": { "customerName": "Mr. Tejas Gowda", "pan": "ABCDE1234F", ... }
 }
 ```
 
-### `POST /api/analyze/report`
+---
 
-Upload a PDF, download a 4-sheet `.xlsx` report.
+### Spending Analytics Endpoints
 
-```bash
-curl -F "file=@statement.pdf" http://localhost:8080/api/analyze/report --output report.xlsx
+| Method | Endpoint | Returns | Description |
+|---|---|---|---|
+| `POST` | `/api/spending/categories` | JSON | Spend breakdown: Food, Hotel, Entertainment, Travel |
+| `POST` | `/api/spending/forecast` | JSON | Inflation-adjusted 3-scenario projections |
+| `POST` | `/api/spending/productivity` | JSON | Health score + 50/30/20 + recommendations |
+
+All three endpoints accept `multipart/form-data` with a single `file` field (PDF, max 50 MB).
+
+#### `POST /api/spending/categories` — Example response
+
+```json
+{
+  "totalSpend": 55000.00,
+  "totalMonths": 4,
+  "dateRange": "2024-01 to 2024-04",
+  "food": {
+    "categoryName": "Food & Groceries",
+    "subCategories": ["FOOD_DINING", "GROCERIES"],
+    "totalSpend": 14200.00,
+    "percentageOfTotal": 25.82,
+    "averageMonthlySpend": 3550.00,
+    "momChangePercent": 6.5,
+    "trendDirection": "INCREASING",
+    "highestSpend": 4100.00,
+    "highestSpendMonth": "2024-04",
+    "monthlyBreakdown": [
+      { "month": "2024-01", "amount": 3200.00, "changeFromPrevious": 0.0 },
+      { "month": "2024-02", "amount": 3400.00, "changeFromPrevious": 6.25 }
+    ],
+    "topMerchants": [
+      { "merchant": "Swiggy", "count": 12, "totalDebit": 4800.00 }
+    ]
+  },
+  "hotelAndMerchant": { ... },
+  "entertainment": { ... },
+  "travel": { ... },
+  "allCategories": [ ... ]
+}
 ```
 
-**Excel sheets:**
-1. **Customer Details** — extracted header fields (name, account, branch, IFSC, PAN, etc.) — first sheet when available
-2. **All Transactions** — date, description, debit, credit, balance, payment mode, merchant, category
-3. **By Payment Mode** — totals per UPI / NEFT / ATM etc.
-4. **By Merchant** — top 20 merchants by spend
-5. **By Month** — monthly debit/credit totals
+#### `POST /api/spending/forecast?months=6&inflationRate=6.0` — Example response
 
-### `POST /api/analyze/pdf-report`
-
-Upload a PDF, download a multi-section PDF report.
-
-```bash
-curl -F "file=@statement.pdf" http://localhost:8080/api/analyze/pdf-report --output report.pdf
+```json
+{
+  "forecastMonths": 6,
+  "annualInflationRate": 6.0,
+  "methodology": "Linear Regression + Compound Inflation Projection",
+  "totalPotentialSavings": 2840.00,
+  "food": {
+    "categoryName": "Food & Groceries",
+    "historicalMonthlyAverage": 3550.00,
+    "trendSlope": 120.50,
+    "trendDirection": "INCREASING",
+    "conservativeTotal": 19380.00,
+    "baselineTotal": 21540.00,
+    "pessimisticTotal": 25100.00,
+    "potentialSavings": 2160.00,
+    "projections": [
+      { "month": "2024-05", "conservative": 3195.00, "baseline": 3552.00, "pessimistic": 3850.00 },
+      { "month": "2024-06", "conservative": 3211.00, "baseline": 3570.00, "pessimistic": 3980.00 }
+    ]
+  },
+  "assumptions": [
+    "Annual inflation rate: 6.0% (adjustable via 'inflationRate' param)",
+    "Conservative scenario: historical average reduced by 10% then inflation-adjusted",
+    "Baseline scenario: historical average inflation-adjusted (no behaviour change)",
+    "Pessimistic scenario: linear-regression trend extrapolated then inflation-adjusted"
+  ]
+}
 ```
 
-### `POST /api/analyze/multi/summary`
+#### `POST /api/spending/productivity` — Example response
 
-Upload multiple PDFs, get a merged JSON summary.
-
-```bash
-curl -F "files=@jan.pdf" -F "files=@feb.pdf" http://localhost:8080/api/analyze/multi/summary
+```json
+{
+  "financialHealthScore": 68,
+  "healthRating": "GOOD",
+  "totalIncome": 80000.00,
+  "totalSpend": 55000.00,
+  "netSavings": 25000.00,
+  "savingsRate": 31.25,
+  "budgetRuleAnalysis": {
+    "needsTargetPercent": 50.0,
+    "wantsTargetPercent": 30.0,
+    "savingsTargetPercent": 20.0,
+    "needsActualPercent": 44.0,
+    "wantsActualPercent": 37.5,
+    "savingsActualPercent": 31.25,
+    "needsStatus": "ON_TARGET",
+    "wantsStatus": "OVER",
+    "savingsStatus": "ON_TARGET",
+    "savingsGapMonthly": 0.0
+  },
+  "essentialSpend": 24200.00,
+  "discretionarySpend": 20600.00,
+  "essentialPercent": 44.0,
+  "discretionaryPercent": 37.5,
+  "recommendations": [
+    {
+      "priority": 1,
+      "category": "Entertainment",
+      "action": "REDUCE",
+      "message": "Entertainment accounts for 9.5% of your spend (benchmark: 8%). Reducing by ₹275/month could save ₹3,300/year. Tip: audit streaming subscriptions — cancel unused ones and share family plans.",
+      "currentMonthlyAmount": 800.00,
+      "targetMonthlyAmount": 525.00,
+      "potentialMonthlySavings": 275.00,
+      "annualSavingsPotential": 3300.00
+    }
+  ],
+  "averageDailySpend": 612.50,
+  "projectedAnnualSpend": 223562.50,
+  "emergencyFundMonths": 1.82
+}
 ```
 
-### `POST /api/analyze/multi/report`
+---
 
-Upload multiple PDFs, download a merged XLSX report.
+## Swagger UI
 
-```bash
-curl -F "files=@jan.pdf" -F "files=@feb.pdf" \
-  http://localhost:8080/api/analyze/multi/report --output merged.xlsx
-```
+Interactive API documentation is available when the app is running.
 
-### `POST /api/analyze/submit`
+| URL | Content |
+|---|---|
+| `http://localhost:8080/swagger-ui.html` | Swagger UI — try endpoints in the browser |
+| `http://localhost:8080/v3/api-docs` | Raw OpenAPI 3.0 JSON spec |
+| `http://localhost:8080/v3/api-docs.yaml` | Raw OpenAPI 3.0 YAML spec |
 
-Submit a file for async background processing. Returns `HTTP 202` with a `jobId`.
+The UI organises endpoints into four groups:
 
-```bash
-curl -F "file=@statement.pdf" http://localhost:8080/api/analyze/submit
-```
+| Tag | Endpoints |
+|---|---|
+| **Analysis** | `/api/analyze/*` — summary, report, PDF, multi, async, raw-text |
+| **Spending Analytics** | `/api/spending/categories` |
+| **Forecast** | `/api/spending/forecast` |
+| **Productivity** | `/api/spending/productivity` |
+| **Health** | `/api/health` |
 
-### `GET /api/analyze/status/{jobId}`
-
-Poll for job result.
-
-```bash
-curl http://localhost:8080/api/analyze/status/{jobId}
-```
-
-### `POST /api/analyze/raw-text`
-
-Returns raw text extracted by PDFBox — useful for debugging unknown statement formats.
-
-```bash
-curl -F "file=@statement.pdf" http://localhost:8080/api/analyze/raw-text
-```
+Each endpoint documents its request parameters, file upload field, all response codes, and example response schemas — no separate Postman collection needed.
 
 ---
 
 ## Rate Limiting
 
-Applied only to `/api/analyze/*` endpoints. Health check is never rate-limited.
+Applied to all `/api/*` endpoints. Health check is never rate-limited.
 
 ```properties
 ratelimit.enabled=true
-ratelimit.capacity=20            # max burst size
-ratelimit.refill-tokens=20       # tokens restored per period
+ratelimit.capacity=20
+ratelimit.refill-tokens=20
 ratelimit.refill-duration=1
-ratelimit.refill-unit=MINUTES    # SECONDS / MINUTES / HOURS
-ratelimit.cache-size=10000       # max unique IPs tracked simultaneously
+ratelimit.refill-unit=MINUTES
+ratelimit.cache-size=10000
 ratelimit.cache-expire-minutes=10
 ```
 
-On limit breach — `HTTP 429` with:
-- `Retry-After` header (seconds until next token)
-- `X-Rate-Limit-Capacity` and `X-Rate-Limit-Remaining` headers on every response
-- JSON body with human-readable message
+`HTTP 429` response includes `Retry-After`, `X-Rate-Limit-Capacity`, and `X-Rate-Limit-Remaining` headers.
 
 ---
 
@@ -868,11 +777,11 @@ On limit breach — `HTTP 429` with:
 | Cache | Key | TTL | Purpose |
 |---|---|---|---|
 | `paymentMode` | description | none | `detectPaymentMode()` — pure function |
-| `merchant` | description + mode | none | `extractMerchant()` — pure function |
+| `merchant` | description | none | `extractMerchant()` — pure function |
 | `category` | description | none | `categorize()` — pure function |
 | `analysis` | MD5 of PDF bytes | 1 hour | Full parse + analyze result per file |
 
-All caches use **Caffeine** (in-memory). To switch to Redis, replace `CacheConfig` with a `RedisCacheManager` and add `spring-boot-starter-data-redis`.
+All caches use **Caffeine** (in-memory). Spending Analytics endpoints do not use the cache (real-time per request).
 
 ---
 
@@ -885,14 +794,14 @@ spring.servlet.multipart.max-file-size=50MB
 spring.servlet.multipart.max-request-size=52MB
 
 # ── Persistence toggle ──────────────────────────────────────────────────────
-persistence.enabled=false           # true = PostgreSQL; false = in-memory only (default)
+persistence.enabled=false
 
-# ── PostgreSQL (only used when persistence.enabled=true) ────────────────────
+# ── PostgreSQL (only when persistence.enabled=true) ────────────────────────
 #spring.datasource.url=jdbc:postgresql://localhost:5432/bankanalyzer
 #spring.datasource.username=postgres
 #spring.datasource.password=postgres
 
-# ── Deduplication (only active when persistence.enabled=true) ───────────────
+# ── Deduplication ───────────────────────────────────────────────────────────
 dedup.enabled=true
 dedup.window-hours=24
 
@@ -904,6 +813,10 @@ ratelimit.refill-duration=1
 ratelimit.refill-unit=MINUTES
 ratelimit.cache-size=10000
 ratelimit.cache-expire-minutes=10
+
+# ── Swagger ─────────────────────────────────────────────────────────────────
+springdoc.swagger-ui.path=/swagger-ui.html
+springdoc.api-docs.path=/v3/api-docs
 
 # ── Logging ─────────────────────────────────────────────────────────────────
 logging.level.com.bankanalyzer=INFO
@@ -919,18 +832,17 @@ logging.level.com.bankanalyzer=INFO
 # Build
 mvn clean package -DskipTests
 
-# Run (persistence disabled by default — no DB needed)
-java -jar target/bank-statement-analyzer-1.0.0.jar
+# Run (no DB needed by default)
+java -jar target/bank-statement-analyzer-1.2.0.jar
 
-# Run with persistence enabled
-java -jar target/bank-statement-analyzer-1.0.0.jar \
-  --persistence.enabled=true \
-  --spring.datasource.url=jdbc:postgresql://localhost:5432/bankanalyzer \
-  --spring.datasource.username=postgres \
-  --spring.datasource.password=postgres
+# Open Swagger UI
+open http://localhost:8080/swagger-ui.html
 
 # Health check
 curl http://localhost:8080/api/health
+
+# Quick spending test
+curl -F "file=@statement.pdf" http://localhost:8080/api/spending/categories | jq .
 ```
 
 ---
@@ -941,10 +853,10 @@ curl http://localhost:8080/api/health
 # Build image
 docker build -t bank-statement-analyzer:latest .
 
-# Run (persistence disabled)
+# Run
 docker run -p 8080:8080 bank-statement-analyzer:latest
 
-# Run with persistence enabled
+# With persistence
 docker run -p 8080:8080 \
   -e PERSISTENCE_ENABLED=true \
   -e SPRING_DATASOURCE_URL=jdbc:postgresql://host.docker.internal:5432/bankanalyzer \
@@ -953,9 +865,7 @@ docker run -p 8080:8080 \
   bank-statement-analyzer:latest
 ```
 
-**Dockerfile** uses a two-stage build:
-- **Stage 1** (`maven:3.9-eclipse-temurin-21-alpine`) — compiles and packages fat jar; Maven `.m2` cache mounted via BuildKit
-- **Stage 2** (`eclipse-temurin:21-jre-alpine`) — copies only the jar; final image ~180 MB
+**Dockerfile:** two-stage build — Maven 3.9 compiles, Eclipse Temurin 21 JRE runs. Final image ~180 MB.
 
 ---
 
@@ -963,15 +873,13 @@ docker run -p 8080:8080 \
 
 1. Create `src/main/java/com/bankanalyzer/parser/impl/XyzBankParser.java`
 2. Extend `AbstractBankParser`, implement `BankParser`
-3. Annotate `@Component` + `@Order(N)` (lower number = checked before Generic fallback)
+3. Annotate `@Component` + `@Order(N)`
 
 ```java
 @Slf4j
 @Component
 @Order(4)
 public class XyzBankParser extends AbstractBankParser {
-
-    private static final Pattern TX_PATTERN = Pattern.compile("...");
 
     @Override public String bankName()             { return "XYZ Bank"; }
     @Override public StatementType statementType() { return StatementType.SAVINGS_ACCOUNT; }
@@ -983,21 +891,17 @@ public class XyzBankParser extends AbstractBankParser {
 
     @Override
     public List<Transaction> parse(String text) {
-        // line-by-line regex parsing
-        // use buildDebitCreditTransaction() or buildAmountTransaction() from AbstractBankParser
+        // line-by-line regex — use buildDebitCreditTransaction() from AbstractBankParser
     }
 
     @Override
     public CustomerDetails extractCustomerDetails(String rawText) {
-        // optional — pull name, account number, branch, etc. from the PDF header
-        // return CustomerDetails.builder().build() to leave all fields null
         return CustomerDetails.builder()
-            .accountNumber(/* regex match */)
+            .accountNumber(/* regex */)
+            .customerName(/* regex */)
             .build();
     }
 }
 ```
 
-No other files need to change. Spring auto-registers and orders the parser.
-
-> **Tip:** Use `POST /api/analyze/raw-text` to inspect what PDFBox extracts before writing the regex pattern, then craft `extractCustomerDetails()` regex patterns against the same raw text.
+No other files need to change — `BankParserRegistry` picks it up automatically via Spring DI.

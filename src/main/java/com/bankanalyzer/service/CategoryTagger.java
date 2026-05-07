@@ -8,11 +8,8 @@ import org.springframework.stereotype.Service;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
-/**
- * Tags a transaction description with a spending category.
- * Keywords are evaluated in definition order — more specific first.
- */
 @Slf4j
 @Service
 public class CategoryTagger {
@@ -78,11 +75,25 @@ public class CategoryTagger {
         ));
     }
 
+    // BK-Tree built once at startup from keyword → category mappings
+    private static final BKTree BK_TREE = new BKTree();
+
+    // Max edit distance — scales with token length to avoid short-word false positives
+    private static final int BASE_THRESHOLD = 2;
+
+    static {
+        KEYWORDS.forEach((category, keywords) ->
+            keywords.forEach(kw -> BK_TREE.insert(kw.trim(), category))
+        );
+        log.info("BKTree built with {} keyword entries", KEYWORDS.values().stream().mapToInt(List::size).sum());
+    }
+
     @Cacheable(value = "category", key = "#description")
     public Category categorize(String description) {
         if (description == null || description.isBlank()) return Category.OTHER;
         String upper = description.toUpperCase();
 
+        // Fast path: exact substring match (handles clean merchant names)
         for (Map.Entry<Category, List<String>> entry : KEYWORDS.entrySet()) {
             for (String keyword : entry.getValue()) {
                 if (upper.contains(keyword)) {
@@ -90,6 +101,26 @@ public class CategoryTagger {
                 }
             }
         }
+
+        // Fuzzy path: normalize merchant name then BK-Tree lookup
+        String normalized = MerchantNormalizer.normalize(upper);
+        if (normalized.isBlank()) return Category.OTHER;
+
+        int threshold = computeThreshold(normalized);
+        Optional<Category> fuzzy = BK_TREE.search(normalized, threshold);
+        if (fuzzy.isPresent()) {
+            log.debug("BKTree matched '{}' → {}", normalized, fuzzy.get());
+            return fuzzy.get();
+        }
+
         return Category.OTHER;
+    }
+
+    // Longer tokens tolerate more edit distance; short tokens (≤4 chars) allow only 1
+    private static int computeThreshold(String token) {
+        int len = token.length();
+        if (len <= 4) return 1;
+        if (len <= 7) return BASE_THRESHOLD;
+        return BASE_THRESHOLD + 1;
     }
 }

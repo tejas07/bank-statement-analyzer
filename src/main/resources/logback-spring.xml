@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Console appender — human-readable for local dev -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Loki appender — pushes structured JSON logs directly to Loki via HTTP -->
+    <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>http://localhost:3100/loki/api/v1/push</url>
+        </http>
+        <format>
+            <label>
+                <pattern>app=bank-analyzer,level=%level,logger=%logger{0}</pattern>
+            </label>
+            <message>
+                <pattern>
+                    level=%level logger=%logger{36} thread=%thread message=%msg
+                </pattern>
+            </message>
+            <sortByTime>true</sortByTime>
+        </format>
+    </appender>
+
+    <!-- Async wrapper so Loki HTTP calls never block request threads -->
+    <appender name="LOKI_ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOKI"/>
+        <queueSize>512</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <!-- Root logger -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOKI_ASYNC"/>
+    </root>
+
+    <!-- AOP aspect — DEBUG to capture PERF lines in Loki -->
+    <logger name="com.bankanalyzer.aspect" level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOKI_ASYNC"/>
+    </logger>
+
+    <!-- Suppress noisy Spring internals -->
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="org.hibernate"       level="WARN"/>
+
+</configuration>
