@@ -1,34 +1,30 @@
 # Bank Statement Analyzer
 
-A Spring Boot REST API that parses Indian bank statement PDFs, extracts customer and account details from the PDF
-header, enriches transactions with payment mode, merchant, and category detection, and produces structured JSON
-summaries, spending analytics, inflation-adjusted forecasts, financial productivity insights, and downloadable Excel/PDF
-reports.
+A Spring Boot REST API that parses Indian bank statement PDFs, extracts customer and account details from the PDF header, enriches transactions with payment mode, merchant, and category detection, and produces structured JSON summaries, spending analytics, inflation-adjusted forecasts, financial productivity insights, and downloadable Excel/PDF reports.
 
 ---
 
 ## Table of Contents
-
 - [Tech Stack](#tech-stack)
 - [High Level Design (HLD)](#high-level-design-hld)
 - [Low Level Design (LLD)](#low-level-design-lld)
 - [Flow Diagram](#flow-diagram)
 - [Design Patterns](#design-patterns)
 - [Features](#features)
-    - [Customer Details Extraction](#customer-details-extraction)
-    - [Multi-file Upload & Merge](#multi-file-upload--merge)
-    - [Duplicate Transaction Detection](#duplicate-transaction-detection)
-    - [Category Tagging](#category-tagging)
-    - [Spending Insights](#spending-insights)
-    - [Spending Analytics API](#spending-analytics-api)
-    - [PDF Report Output](#pdf-report-output)
-    - [Persistence (PostgreSQL)](#persistence-postgresql)
-    - [Webhook / Callback](#webhook--callback)
-    - [Async Processing & Job Polling](#async-processing--job-polling)
-    - [File Deduplication](#file-deduplication)
+  - [Customer Details Extraction](#customer-details-extraction)
+  - [Multi-file Upload & Merge](#multi-file-upload--merge)
+  - [Duplicate Transaction Detection](#duplicate-transaction-detection)
+  - [Category Tagging](#category-tagging)
+  - [Spending Insights](#spending-insights)
+  - [Spending Analytics API](#spending-analytics-api)
+  - [PDF Report Output](#pdf-report-output)
+  - [Persistence (PostgreSQL)](#persistence-postgresql)
+  - [Webhook / Callback](#webhook--callback)
+  - [Async Processing & Job Polling](#async-processing--job-polling)
+  - [File Deduplication](#file-deduplication)
 - [API Reference](#api-reference)
-    - [Analysis Endpoints](#analysis-endpoints)
-    - [Spending Analytics Endpoints](#spending-analytics-endpoints)
+  - [Analysis Endpoints](#analysis-endpoints)
+  - [Spending Analytics Endpoints](#spending-analytics-endpoints)
 - [Swagger UI](#swagger-ui)
 - [Rate Limiting](#rate-limiting)
 - [Caching](#caching)
@@ -41,21 +37,21 @@ reports.
 
 ## Tech Stack
 
-| Layer            | Library / Framework                | Purpose                                                                                                                                         |
-|------------------|------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| Runtime          | Java 21, Spring Boot 3.2           | Application framework                                                                                                                           |
-| PDF Parsing      | Apache PDFBox 3.0                  | Extract raw text from PDF bank statements                                                                                                       |
-| Excel Generation | Apache POI 5.3 (OOXML)             | Write multi-sheet `.xlsx` reports with pie charts                                                                                               |
-| PDF Generation   | OpenPDF 1.3 (LibrePDF)             | Write multi-section `.pdf` reports with tables                                                                                                  |
-| Caching          | Caffeine + Spring Cache            | In-memory per-method and per-request caching (`@Cacheable`)                                                                                     |
-| Rate Limiting    | Bucket4j 8.10                      | Token-bucket rate limiting per client IP                                                                                                        |
-| Async Processing | Spring Kafka + `@Async`            | Background job processing with status polling                                                                                                   |
-| Persistence      | Spring Data JPA + PostgreSQL       | Store uploads and transactions (optional, toggle-based)                                                                                         |
-| DB Migration     | Flyway                             | Schema versioning, runs automatically on startup                                                                                                |
-| API Docs         | SpringDoc OpenAPI 2.5 (Swagger UI) | Interactive API docs at `/swagger-ui.html`                                                                                                      |
-| Boilerplate      | Lombok                             | `@Slf4j`, `@Builder`, `@Getter` annotations                                                                                                     |
-| Build            | Maven 3.9, multi-module reactor    | 5 modules (`bank-common`, `parser-module`, `report-module`, `analysis-module`, `gateway-module`) assembled into one fat jar by `gateway-module` |
-| Container        | Docker (multi-stage, Alpine)       | Lightweight production image                                                                                                                    |
+| Layer | Library / Framework | Purpose |
+|---|---|---|
+| Runtime | Java 21, Spring Boot 3.2 | Application framework |
+| PDF Parsing | Apache PDFBox 3.0 | Extract raw text from PDF bank statements |
+| Excel Generation | Apache POI 5.3 (OOXML) | Write multi-sheet `.xlsx` reports with pie charts |
+| PDF Generation | OpenPDF 1.3 (LibrePDF) | Write multi-section `.pdf` reports with tables |
+| Caching | Caffeine + Spring Cache | In-memory per-method and per-request caching (`@Cacheable`) |
+| Rate Limiting | Bucket4j 8.10 | Token-bucket rate limiting per client IP |
+| Async Processing | Spring Kafka + `@Async` | Background job processing with status polling |
+| Persistence | Spring Data JPA + PostgreSQL | Store uploads and transactions (optional, toggle-based) |
+| DB Migration | Flyway | Schema versioning, runs automatically on startup |
+| API Docs | SpringDoc OpenAPI 2.5 (Swagger UI) | Interactive API docs at `/swagger-ui.html` |
+| Boilerplate | Lombok | `@Slf4j`, `@Builder`, `@Getter` annotations |
+| Build | Maven 3.9, multi-module reactor | 5 modules (`bank-common`, `parser-module`, `report-module`, `analysis-module`, `gateway-module`) assembled into one fat jar by `gateway-module` |
+| Container | Docker (multi-stage, Alpine) | Lightweight production image |
 
 ---
 
@@ -125,24 +121,24 @@ microservices split would take: `gateway-module` → `analysis-module` → `pars
 
 **Key responsibilities:**
 
-| Component                                              | Module      | Responsibility                                                                                                                                     |
-|--------------------------------------------------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `RateLimitFilter`                                      | gateway     | Per-IP token bucket; blocks request with 429 before controller                                                                                     |
-| `AnalyzeController`                                    | gateway     | Validates file, checks dedup, calls the pipeline, orchestrates the response                                                                        |
-| `SpendingController`                                   | gateway     | Routes to analytics / forecast / productivity services                                                                                             |
-| `StatementAnalysisPipeline`                            | analysis    | Single parse→analyze→persist sequence shared by the sync (`AnalyzeController`) and async (`AnalysisJobConsumer`) paths; `@Cacheable` per file hash |
-| `BankStatementParser`                                  | parser      | PDFBox text extraction, sanitization, dispatches to correct parser                                                                                 |
-| `BankParserRegistry`                                   | parser      | Auto-detects bank format via `supports()` in `@Order` sequence                                                                                     |
-| `TransactionAnalyzer`                                  | analysis    | Enriches transactions — payment mode, merchant, category                                                                                           |
-| `SpendingAnalyticsService`                             | analysis    | Facade over `CategorySpendingCalculator`, `BudgetRuleAnalyzer`, `FinancialHealthScorer`, `RecommendationEngine`                                    |
-| `ForecastService`                                      | analysis    | Linear regression + inflation-adjusted 3-scenario projection                                                                                       |
-| `InsightService`                                       | analysis    | Computes spending insights — highest spend, recurring, unusual                                                                                     |
-| `DuplicateDetector`                                    | analysis    | Thin delegate over `bank-common`'s `DuplicateTransactionFinder`                                                                                    |
-| `TransactionGroups` / `DuplicateTransactionFinder`     | bank-common | Pure, framework-free grouping/dedup shared by analysis-module and report-module                                                                    |
-| `AsyncJobService` / Kafka producer, consumer, listener | analysis    | Submits analysis jobs via Kafka, tracks status, updates on result                                                                                  |
-| `PersistenceGateway`                                   | analysis    | Interface — routes to real DB or no-op depending on toggle                                                                                         |
-| `WebhookService`                                       | analysis    | Async HTTP POST of results to caller-provided URL                                                                                                  |
-| `ExcelReportGenerator` / `PdfReportGenerator`          | report      | Orchestrate per-sheet/per-section writer classes to build `.xlsx`/`.pdf`                                                                           |
+| Component | Module | Responsibility |
+|---|---|---|
+| `RateLimitFilter` | gateway | Per-IP token bucket; blocks request with 429 before controller |
+| `AnalyzeController` | gateway | Validates file, checks dedup, calls the pipeline, orchestrates the response |
+| `SpendingController` | gateway | Routes to analytics / forecast / productivity services |
+| `StatementAnalysisPipeline` | analysis | Single parse→analyze→persist sequence shared by the sync (`AnalyzeController`) and async (`AnalysisJobConsumer`) paths; `@Cacheable` per file hash |
+| `BankStatementParser` | parser | PDFBox text extraction, sanitization, dispatches to correct parser |
+| `BankParserRegistry` | parser | Auto-detects bank format via `supports()` in `@Order` sequence |
+| `TransactionAnalyzer` | analysis | Enriches transactions — payment mode, merchant, category |
+| `SpendingAnalyticsService` | analysis | Facade over `CategorySpendingCalculator`, `BudgetRuleAnalyzer`, `FinancialHealthScorer`, `RecommendationEngine` |
+| `ForecastService` | analysis | Linear regression + inflation-adjusted 3-scenario projection |
+| `InsightService` | analysis | Computes spending insights — highest spend, recurring, unusual |
+| `DuplicateDetector` | analysis | Thin delegate over `bank-common`'s `DuplicateTransactionFinder` |
+| `TransactionGroups` / `DuplicateTransactionFinder` | bank-common | Pure, framework-free grouping/dedup shared by analysis-module and report-module |
+| `AsyncJobService` / Kafka producer, consumer, listener | analysis | Submits analysis jobs via Kafka, tracks status, updates on result |
+| `PersistenceGateway` | analysis | Interface — routes to real DB or no-op depending on toggle |
+| `WebhookService` | analysis | Async HTTP POST of results to caller-provided URL |
+| `ExcelReportGenerator` / `PdfReportGenerator` | report | Orchestrate per-sheet/per-section writer classes to build `.xlsx`/`.pdf` |
 
 ---
 
@@ -315,12 +311,12 @@ Transaction
 
 ### Supported Bank Formats
 
-| Parser                  | Statement Type  | Date Format                               | Detection Keywords            | Customer Fields                                                             |
-|-------------------------|-----------------|-------------------------------------------|-------------------------------|-----------------------------------------------------------------------------|
-| `IciciCreditCardParser` | Credit Card     | `DD-MMM-YY`                               | `ICICI` + `Credit Card`       | Name, account, statement period, closing balance                            |
-| `IciciSavingsParser`    | Savings Account | `DD/MM/YYYY`                              | `ICICI` (no CC keyword)       | Name, account, branch, IFSC, statement period                               |
-| `SbiParser`             | Savings Account | `DD/MM/YYYY DD/MM/YYYY`                   | `State Bank of India`, `SBIN` | 19 fields — name, account, branch, IFSC, MICR, CIF, PAN, email, mobile, KYC |
-| `GenericBankParser`     | Savings Account | `DD/MM/YYYY`, `DD-MM-YYYY`, `DD MMM YYYY` | fallback — always matches     | None                                                                        |
+| Parser | Statement Type | Date Format | Detection Keywords | Customer Fields |
+|---|---|---|---|---|
+| `IciciCreditCardParser` | Credit Card | `DD-MMM-YY` | `ICICI` + `Credit Card` | Name, account, statement period, closing balance |
+| `IciciSavingsParser` | Savings Account | `DD/MM/YYYY` | `ICICI` (no CC keyword) | Name, account, branch, IFSC, statement period |
+| `SbiParser` | Savings Account | `DD/MM/YYYY DD/MM/YYYY` | `State Bank of India`, `SBIN` | 19 fields — name, account, branch, IFSC, MICR, CIF, PAN, email, mobile, KYC |
+| `GenericBankParser` | Savings Account | `DD/MM/YYYY`, `DD-MM-YYYY`, `DD MMM YYYY` | fallback — always matches | None |
 
 ---
 
@@ -409,17 +405,12 @@ POST /api/spending/categories  (or /forecast or /productivity)
 ## Design Patterns
 
 ### Strategy + Registry (Parser)
-
-`BankParser` is a strategy interface. `BankParserRegistry` resolves the correct implementation via `@Order`-sorted
-`supports()` calls.
+`BankParser` is a strategy interface. `BankParserRegistry` resolves the correct implementation via `@Order`-sorted `supports()` calls.
 
 ### Template Method (Abstract Parser)
-
-`AbstractBankParser` provides shared utilities. Concrete parsers only implement `supports()`, `parse()`, and
-`bankName()`.
+`AbstractBankParser` provides shared utilities. Concrete parsers only implement `supports()`, `parse()`, and `bankName()`.
 
 ### Strategy (Persistence Toggle)
-
 `PersistenceGateway` interface with two implementations selected by `@ConditionalOnProperty`.
 
 ```
@@ -428,54 +419,30 @@ persistence.enabled=true   →  StatementPersistenceService (PostgreSQL)
 ```
 
 ### Strategy (Validation)
-
-`Validator<T>` is a generic strategy interface (`validate(T target)`, throws `IllegalArgumentException` on failure,
-mapped to HTTP 400 by `GlobalExceptionHandler`). Implementations: `FileUploadValidator`, `MultiFileUploadValidator`,
-`ForecastParamsValidator`, `WebhookUrlValidator` — replacing what used to be duplicated inline `if`/`throw` blocks in
-each controller.
+`Validator<T>` is a generic strategy interface (`validate(T target)`, throws `IllegalArgumentException` on failure, mapped to HTTP 400 by `GlobalExceptionHandler`). Implementations: `FileUploadValidator`, `MultiFileUploadValidator`, `ForecastParamsValidator`, `WebhookUrlValidator` — replacing what used to be duplicated inline `if`/`throw` blocks in each controller.
 
 ### Dependency Inversion (Interface Segregation)
-
-`TransactionAnalysis` and `StatementParsing` are extracted from `TransactionAnalyzer`/`BankStatementParser` so
-controllers, report generators, and the pipeline depend on the abstraction, not the concrete class. This is what makes
-swapping the concrete implementation for a remote-service client (a future microservices step) a mechanical change
-rather than a rewrite.
+`TransactionAnalysis` and `StatementParsing` are extracted from `TransactionAnalyzer`/`BankStatementParser` so controllers, report generators, and the pipeline depend on the abstraction, not the concrete class. This is what makes swapping the concrete implementation for a remote-service client (a future microservices step) a mechanical change rather than a rewrite.
 
 ### Facade
-
-`SpendingAnalyticsService` is a thin facade (~30 lines) over `CategorySpendingCalculator`, `BudgetRuleAnalyzer`,
-`FinancialHealthScorer`, and `RecommendationEngine` — the original 501-line class split by single responsibility, with
-the facade kept so `SpendingController`/`ForecastService` didn't need to change. `ExcelReportGenerator`/
-`PdfReportGenerator` are themselves facades over their per-sheet/per-section writer classes.
+`SpendingAnalyticsService` is a thin facade (~30 lines) over `CategorySpendingCalculator`, `BudgetRuleAnalyzer`, `FinancialHealthScorer`, and `RecommendationEngine` — the original 501-line class split by single responsibility, with the facade kept so `SpendingController`/`ForecastService` didn't need to change. `ExcelReportGenerator`/`PdfReportGenerator` are themselves facades over their per-sheet/per-section writer classes.
 
 ### Shared Kernel (bank-common)
-
-`TransactionGroups` and `DuplicateTransactionFinder` are pure, static, framework-free functions over `Transaction`
-living in `bank-common`. Both `analysis-module` (`TransactionAnalyzer`, `DuplicateDetector`) and `report-module` (the
-sheet/section writers) call them directly — this is what keeps the report ↔ analysis module dependency acyclic:
-report-module never needs to depend on analyzer/service just to compute a total or find a duplicate.
+`TransactionGroups` and `DuplicateTransactionFinder` are pure, static, framework-free functions over `Transaction` living in `bank-common`. Both `analysis-module` (`TransactionAnalyzer`, `DuplicateDetector`) and `report-module` (the sheet/section writers) call them directly — this is what keeps the report ↔ analysis module dependency acyclic: report-module never needs to depend on analyzer/service just to compute a total or find a duplicate.
 
 ### Pipeline (Unified Orchestration)
-
-`StatementAnalysisPipeline` is the single parse → analyze → persist sequence used by both the synchronous REST path (
-`AnalyzeController`) and the async Kafka path (`AnalysisJobConsumer`) — previously duplicated inline in both places. Its
-`@Cacheable` methods (`buildSummaryCached`, `buildExcelReportCached`, `buildPdfReportCached`) also replaced
-`AnalyzeController`'s manual `CacheManager.get/put` calls.
+`StatementAnalysisPipeline` is the single parse → analyze → persist sequence used by both the synchronous REST path (`AnalyzeController`) and the async Kafka path (`AnalysisJobConsumer`) — previously duplicated inline in both places. Its `@Cacheable` methods (`buildSummaryCached`, `buildExcelReportCached`, `buildPdfReportCached`) also replaced `AnalyzeController`'s manual `CacheManager.get/put` calls.
 
 ### Table-Driven Config (over switch statements)
-
-`CategoryLabelProvider` (category → display label) and `RecommendationEngine`'s per-category benchmark map (target % +
-tip) replace what used to be `switch` statements — adding a category no longer means touching multiple methods.
+`CategoryLabelProvider` (category → display label) and `RecommendationEngine`'s per-category benchmark map (target % + tip) replace what used to be `switch` statements — adding a category no longer means touching multiple methods.
 
 ### Filter Chain (Rate Limiting)
-
 `RateLimitFilter` extends `OncePerRequestFilter` and runs before any controller logic.
 
 ### Cache-Aside
-
-| Level    | Where                                                                                              | Key                                               |
-|----------|----------------------------------------------------------------------------------------------------|---------------------------------------------------|
-| Method   | `detectPaymentMode`, `extractMerchant`, `categorize`                                               | description string                                |
+| Level | Where | Key |
+|---|---|---|
+| Method | `detectPaymentMode`, `extractMerchant`, `categorize` | description string |
 | Pipeline | `StatementAnalysisPipeline.buildSummaryCached` / `buildExcelReportCached` / `buildPdfReportCached` | `<MD5 of PDF bytes>:summary` / `:report` / `:pdf` |
 
 ---
@@ -488,27 +455,26 @@ Every `/api/analyze/summary` response includes a `customerDetails` object.
 
 **SBI — 19 extracted fields:**
 
-| Field                               | Source                               |
-|-------------------------------------|--------------------------------------|
-| `customerName`                      | Title-prefixed name                  |
-| `accountNumber`                     | `Account Number : <digits>`          |
-| `branch` / `branchCode`             | `Branch Name / Code`                 |
-| `ifscCode` / `micrCode`             | `IFSC Code / MICR Code`              |
-| `cifNumber`                         | `CIF Number`                         |
-| `email` / `mobile`                  | `Email ID / Mobile Number`           |
-| `pan`                               | `PAN <XXXXXNNNNX>`                   |
-| `kycStatus` / `segment`             | `KYC Status / Segment`               |
+| Field | Source |
+|---|---|
+| `customerName` | Title-prefixed name |
+| `accountNumber` | `Account Number : <digits>` |
+| `branch` / `branchCode` | `Branch Name / Code` |
+| `ifscCode` / `micrCode` | `IFSC Code / MICR Code` |
+| `cifNumber` | `CIF Number` |
+| `email` / `mobile` | `Email ID / Mobile Number` |
+| `pan` | `PAN <XXXXXNNNNX>` |
+| `kycStatus` / `segment` | `KYC Status / Segment` |
 | `accountStatus` / `accountOpenDate` | `Account Status / Account open Date` |
-| `statementPeriod`                   | `Statement From : <date> to <date>`  |
-| `closingBalance` / `currency`       | `Clear Balance / Currency`           |
-| `nomineeNam`                        | `Nominee Name`                       |
+| `statementPeriod` | `Statement From : <date> to <date>` |
+| `closingBalance` / `currency` | `Clear Balance / Currency` |
+| `nomineeNam` | `Nominee Name` |
 
 ---
 
 ### Multi-file Upload & Merge
 
-Upload up to **10 PDF statements** at once. Transactions are merged, sorted chronologically, and returned as a single
-summary.
+Upload up to **10 PDF statements** at once. Transactions are merged, sorted chronologically, and returned as a single summary.
 
 ```bash
 curl -F "files=@sbi_jan.pdf" -F "files=@icici_jan.pdf" \
@@ -534,16 +500,16 @@ Groups transactions by `normalized_description | debit | credit`. Catches double
 
 14 categories with 100+ keywords matched against transaction descriptions.
 
-| Category        | Sample Keywords                                   |
-|-----------------|---------------------------------------------------|
-| `FOOD_DINING`   | Swiggy, Zomato, McDonald, Cafe, Restaurant, Hotel |
-| `TRAVEL`        | IRCTC, Ola, Uber, MakeMyTrip, IndiGo, Rapido      |
-| `SHOPPING`      | Amazon, Flipkart, Myntra, Meesho, Nykaa           |
-| `FUEL`          | HPCL, IOCL, BPCL, Reliance BP, Nayara             |
-| `UTILITIES`     | Airtel, Jio, Electricity, Broadband, DTH          |
-| `INVESTMENT`    | Zerodha, Groww, Mutual Fund, SIP, Kuvera          |
-| `ENTERTAINMENT` | Netflix, Spotify, BookMyShow, PVR, Steam          |
-| `HEALTH`        | Apollo, MedPlus, Practo, PharmEasy, Hospital      |
+| Category | Sample Keywords |
+|---|---|
+| `FOOD_DINING` | Swiggy, Zomato, McDonald, Cafe, Restaurant, Hotel |
+| `TRAVEL` | IRCTC, Ola, Uber, MakeMyTrip, IndiGo, Rapido |
+| `SHOPPING` | Amazon, Flipkart, Myntra, Meesho, Nykaa |
+| `FUEL` | HPCL, IOCL, BPCL, Reliance BP, Nayara |
+| `UTILITIES` | Airtel, Jio, Electricity, Broadband, DTH |
+| `INVESTMENT` | Zerodha, Groww, Mutual Fund, SIP, Kuvera |
+| `ENTERTAINMENT` | Netflix, Spotify, BookMyShow, PVR, Steam |
+| `HEALTH` | Apollo, MedPlus, Practo, PharmEasy, Hospital |
 
 ---
 
@@ -573,17 +539,16 @@ Included in every `/api/analyze/summary` under `insights`:
 
 ### Spending Analytics API
 
-Three new endpoints under `/api/spending/` provide category-level spend data, future projections, and productivity
-recommendations.
+Three new endpoints under `/api/spending/` provide category-level spend data, future projections, and productivity recommendations.
 
 #### Category Groups
 
-| Group            | Underlying Categories      |
-|------------------|----------------------------|
+| Group | Underlying Categories |
+|---|---|
 | Food & Groceries | `FOOD_DINING`, `GROCERIES` |
-| Hotel & Merchant | `SHOPPING`                 |
-| Entertainment    | `ENTERTAINMENT`            |
-| Travel & Fuel    | `TRAVEL`, `FUEL`           |
+| Hotel & Merchant | `SHOPPING` |
+| Entertainment | `ENTERTAINMENT` |
+| Travel & Fuel | `TRAVEL`, `FUEL` |
 
 #### Forecast Methodology
 
@@ -599,21 +564,21 @@ where trend_k = intercept + slope × (histLen + k − 1)
 
 #### Financial Health Score (0–100)
 
-| Dimension             | Max pts | Criteria                                  |
-|-----------------------|---------|-------------------------------------------|
-| Savings rate          | 40      | ≥30% = 40, ≥20% = 30, ≥10% = 20, ≥0% = 10 |
-| Discretionary control | 35      | Wants ≤25% = 35, ≤30% = 25, ≤40% = 15     |
-| Recommendation count  | 25      | 0 recs = 25, ≤2 = 15, ≤4 = 8              |
+| Dimension | Max pts | Criteria |
+|---|---|---|
+| Savings rate | 40 | ≥30% = 40, ≥20% = 30, ≥10% = 20, ≥0% = 10 |
+| Discretionary control | 35 | Wants ≤25% = 35, ≤30% = 25, ≤40% = 15 |
+| Recommendation count | 25 | 0 recs = 25, ≤2 = 15, ≤4 = 8 |
 
 Ratings: **EXCELLENT** ≥80 / **GOOD** ≥60 / **FAIR** ≥40 / **NEEDS_ATTENTION** <40
 
 #### 50/30/20 Budget Rule
 
-| Bucket  | Categories                                              | Target |
-|---------|---------------------------------------------------------|--------|
-| Needs   | Utilities, EMI/Loans, Groceries, Health, Fuel           | 50%    |
-| Wants   | Food/Dining, Entertainment, Shopping, Travel, Education | 30%    |
-| Savings | Investment, SIP                                         | 20%    |
+| Bucket | Categories | Target |
+|---|---|---|
+| Needs | Utilities, EMI/Loans, Groceries, Health, Fuel | 50% |
+| Wants | Food/Dining, Entertainment, Shopping, Travel, Education | 30% |
+| Savings | Investment, SIP | 20% |
 
 ---
 
@@ -624,8 +589,7 @@ curl -F "file=@statement.pdf" \
   http://localhost:8080/api/analyze/pdf-report --output report.pdf
 ```
 
-Sections: Summary bar → Customer details → All transactions → By category → By payment mode → Monthly breakdown →
-Duplicates (if any).
+Sections: Summary bar → Customer details → All transactions → By category → By payment mode → Monthly breakdown → Duplicates (if any).
 
 ---
 
@@ -640,12 +604,12 @@ curl -F "file=@statement.pdf" http://localhost:8080/api/analyze/submit
 curl http://localhost:8080/api/analyze/status/a3f4c7b2-...
 ```
 
-| Status       | HTTP | Meaning                            |
-|--------------|------|------------------------------------|
-| `PENDING`    | 202  | Queued                             |
-| `PROCESSING` | 202  | In progress                        |
-| `DONE`       | 200  | Full `SummaryResponse` in `result` |
-| `FAILED`     | 500  | Error in `error` field             |
+| Status | HTTP | Meaning |
+|---|---|---|
+| `PENDING` | 202 | Queued |
+| `PROCESSING` | 202 | In progress |
+| `DONE` | 200 | Full `SummaryResponse` in `result` |
+| `FAILED` | 500 | Error in `error` field |
 
 Jobs auto-purged after **1 hour** via `@Scheduled` (runs every 5 min).
 
@@ -664,7 +628,6 @@ spring.datasource.password=postgres
 ```
 
 Schema (auto-created by Flyway):
-
 ```sql
 statement_uploads  — id, file_hash, original_filename, bank_name, transaction_count, uploaded_at
 transactions       — id, upload_id, txn_date, description, debit, credit, payment_mode, category
@@ -702,17 +665,17 @@ Returns `HTTP 409 Conflict` for duplicate uploads.
 
 ### Analysis Endpoints
 
-| Method | Endpoint                      | Returns | Description                           |
-|--------|-------------------------------|---------|---------------------------------------|
-| `GET`  | `/api/health`                 | JSON    | Service health check                  |
-| `POST` | `/api/analyze/summary`        | JSON    | Full analysis of a single PDF         |
-| `POST` | `/api/analyze/report`         | XLSX    | 5-sheet Excel report                  |
-| `POST` | `/api/analyze/pdf-report`     | PDF     | Formatted PDF report                  |
-| `POST` | `/api/analyze/raw-text`       | Text    | Raw PDFBox output (debug)             |
-| `POST` | `/api/analyze/multi/summary`  | JSON    | Merged analysis of up to 10 PDFs      |
-| `POST` | `/api/analyze/multi/report`   | XLSX    | Merged Excel report                   |
-| `POST` | `/api/analyze/submit`         | JSON    | Submit PDF for async processing (202) |
-| `GET`  | `/api/analyze/status/{jobId}` | JSON    | Poll async job status                 |
+| Method | Endpoint | Returns | Description |
+|---|---|---|---|
+| `GET` | `/api/health` | JSON | Service health check |
+| `POST` | `/api/analyze/summary` | JSON | Full analysis of a single PDF |
+| `POST` | `/api/analyze/report` | XLSX | 5-sheet Excel report |
+| `POST` | `/api/analyze/pdf-report` | PDF | Formatted PDF report |
+| `POST` | `/api/analyze/raw-text` | Text | Raw PDFBox output (debug) |
+| `POST` | `/api/analyze/multi/summary` | JSON | Merged analysis of up to 10 PDFs |
+| `POST` | `/api/analyze/multi/report` | XLSX | Merged Excel report |
+| `POST` | `/api/analyze/submit` | JSON | Submit PDF for async processing (202) |
+| `GET` | `/api/analyze/status/{jobId}` | JSON | Poll async job status |
 
 #### `POST /api/analyze/summary` — Example response
 
@@ -743,11 +706,11 @@ Returns `HTTP 409 Conflict` for duplicate uploads.
 
 ### Spending Analytics Endpoints
 
-| Method | Endpoint                     | Returns | Description                                         |
-|--------|------------------------------|---------|-----------------------------------------------------|
-| `POST` | `/api/spending/categories`   | JSON    | Spend breakdown: Food, Hotel, Entertainment, Travel |
-| `POST` | `/api/spending/forecast`     | JSON    | Inflation-adjusted 3-scenario projections           |
-| `POST` | `/api/spending/productivity` | JSON    | Health score + 50/30/20 + recommendations           |
+| Method | Endpoint | Returns | Description |
+|---|---|---|---|
+| `POST` | `/api/spending/categories` | JSON | Spend breakdown: Food, Hotel, Entertainment, Travel |
+| `POST` | `/api/spending/forecast` | JSON | Inflation-adjusted 3-scenario projections |
+| `POST` | `/api/spending/productivity` | JSON | Health score + 50/30/20 + recommendations |
 
 All three endpoints accept `multipart/form-data` with a single `file` field (PDF, max 50 MB).
 
@@ -864,24 +827,23 @@ All three endpoints accept `multipart/form-data` with a single `file` field (PDF
 
 Interactive API documentation is available when the app is running.
 
-| URL                                      | Content                                   |
-|------------------------------------------|-------------------------------------------|
-| `http://localhost:8080/swagger-ui.html`  | Swagger UI — try endpoints in the browser |
-| `http://localhost:8080/v3/api-docs`      | Raw OpenAPI 3.0 JSON spec                 |
-| `http://localhost:8080/v3/api-docs.yaml` | Raw OpenAPI 3.0 YAML spec                 |
+| URL | Content |
+|---|---|
+| `http://localhost:8080/swagger-ui.html` | Swagger UI — try endpoints in the browser |
+| `http://localhost:8080/v3/api-docs` | Raw OpenAPI 3.0 JSON spec |
+| `http://localhost:8080/v3/api-docs.yaml` | Raw OpenAPI 3.0 YAML spec |
 
 The UI organises endpoints into four groups:
 
-| Tag                    | Endpoints                                                       |
-|------------------------|-----------------------------------------------------------------|
-| **Analysis**           | `/api/analyze/*` — summary, report, PDF, multi, async, raw-text |
-| **Spending Analytics** | `/api/spending/categories`                                      |
-| **Forecast**           | `/api/spending/forecast`                                        |
-| **Productivity**       | `/api/spending/productivity`                                    |
-| **Health**             | `/api/health`                                                   |
+| Tag | Endpoints |
+|---|---|
+| **Analysis** | `/api/analyze/*` — summary, report, PDF, multi, async, raw-text |
+| **Spending Analytics** | `/api/spending/categories` |
+| **Forecast** | `/api/spending/forecast` |
+| **Productivity** | `/api/spending/productivity` |
+| **Health** | `/api/health` |
 
-Each endpoint documents its request parameters, file upload field, all response codes, and example response schemas — no
-separate Postman collection needed.
+Each endpoint documents its request parameters, file upload field, all response codes, and example response schemas — no separate Postman collection needed.
 
 ---
 
@@ -905,12 +867,12 @@ ratelimit.cache-expire-minutes=10
 
 ## Caching
 
-| Cache         | Key              | TTL    | Purpose                               |
-|---------------|------------------|--------|---------------------------------------|
-| `paymentMode` | description      | none   | `detectPaymentMode()` — pure function |
-| `merchant`    | description      | none   | `extractMerchant()` — pure function   |
-| `category`    | description      | none   | `categorize()` — pure function        |
-| `analysis`    | MD5 of PDF bytes | 1 hour | Full parse + analyze result per file  |
+| Cache | Key | TTL | Purpose |
+|---|---|---|---|
+| `paymentMode` | description | none | `detectPaymentMode()` — pure function |
+| `merchant` | description | none | `extractMerchant()` — pure function |
+| `category` | description | none | `categorize()` — pure function |
+| `analysis` | `<MD5 of PDF bytes>:summary` / `:report` / `:pdf` | 1 hour | `StatementAnalysisPipeline`'s `@Cacheable` methods — summary JSON, XLSX bytes, and PDF bytes each cached independently per file |
 
 All caches use **Caffeine** (in-memory). Spending Analytics endpoints do not use the cache (real-time per request).
 
@@ -1011,6 +973,14 @@ docker run -p 8080:8080 \
 3. Annotate `@Component` + `@Order(N)`
 
 ```java
+import com.bankanalyzer.model.CustomerDetails;   // NOT com.bankanalyzer.api.dto.CustomerDetails —
+                                                  // BankParser.extractCustomerDetails() returns the
+                                                  // domain type; api.dto.CustomerDetails is a
+                                                  // similarly-named but distinct DTO used only at the
+                                                  // API boundary (mapped via CustomerDetailsMapper).
+                                                  // Both live in bank-common, so the wrong import
+                                                  // still compiles — just won't satisfy the interface.
+
 @Slf4j
 @Component
 @Order(4)
