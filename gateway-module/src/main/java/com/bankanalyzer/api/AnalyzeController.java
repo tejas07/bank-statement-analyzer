@@ -1,0 +1,310 @@
+package com.bankanalyzer.api;
+
+import com.bankanalyzer.analyzer.TransactionAnalysis;
+import com.bankanalyzer.api.contract.AnalyzeApi;
+import com.bankanalyzer.api.dto.*;
+import com.bankanalyzer.model.JobStatus;
+import com.bankanalyzer.model.ParseResult;
+import com.bankanalyzer.model.Transaction;
+import com.bankanalyzer.model.entity.StatementUploadEntity;
+import com.bankanalyzer.parser.StatementParsing;
+import com.bankanalyzer.pipeline.StatementAnalysisPipeline;
+import com.bankanalyzer.report.ExcelReportGenerator;
+import com.bankanalyzer.service.AsyncJobService;
+import com.bankanalyzer.service.PersistenceGateway;
+import com.bankanalyzer.service.SummaryBuilder;
+import com.bankanalyzer.service.WebhookService;
+import com.bankanalyzer.validation.FileUploadValidator;
+import com.bankanalyzer.validation.MultiFileUploadValidator;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.util.DigestUtils;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+import reactor.core.publisher.Flux;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Slf4j
+@RestController
+@RequestMapping("/api")
+public class AnalyzeController implements AnalyzeApi {
+
+    private static final String XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    private static final String PDF_MIME = "application/pdf";
+
+    private final StatementParsing parser;
+    private final TransactionAnalysis analyzer;
+    private final ExcelReportGenerator excelReportGenerator;
+    private final SummaryBuilder summaryBuilder;
+    private final AsyncJobService asyncJobService;
+    private final PersistenceGateway persistenceGateway;
+    private final WebhookService webhookService;
+    private final FileUploadValidator fileUploadValidator;
+    private final MultiFileUploadValidator multiFileUploadValidator;
+    private final StatementAnalysisPipeline pipeline;
+
+    public AnalyzeController(StatementParsing parser,
+                             TransactionAnalysis analyzer,
+                             ExcelReportGenerator excelReportGenerator,
+                             SummaryBuilder summaryBuilder,
+                             AsyncJobService asyncJobService,
+                             PersistenceGateway persistenceGateway,
+                             WebhookService webhookService,
+                             FileUploadValidator fileUploadValidator,
+                             MultiFileUploadValidator multiFileUploadValidator,
+                             StatementAnalysisPipeline pipeline) {
+        this.parser = parser;
+        this.analyzer = analyzer;
+        this.excelReportGenerator = excelReportGenerator;
+        this.summaryBuilder = summaryBuilder;
+        this.asyncJobService = asyncJobService;
+        this.persistenceGateway = persistenceGateway;
+        this.webhookService = webhookService;
+        this.fileUploadValidator = fileUploadValidator;
+        this.multiFileUploadValidator = multiFileUploadValidator;
+        this.pipeline = pipeline;
+    }
+
+    // ── Health ────────────────────────────────────────────────────────────────
+
+    @Override
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, String>> health() {
+        return ResponseEntity.ok(Map.of("status", "UP", "service", "bank-statement-analyzer"));
+    }
+
+    // ── Single-file summary ───────────────────────────────────────────────────
+
+    @Override
+    @PostMapping(value = "/analyze/summary", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<SummaryResponse> getSummary(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "webhookUrl", required = false) String webhookUrl)
+            throws IOException {
+
+        fileUploadValidator.validate(file);
+        log.info("Summary request — file: {}, size: {} bytes", file.getOriginalFilename(), file.getSize());
+
+        byte[] fileBytes = file.getBytes();
+        String hash = DigestUtils.md5DigestAsHex(fileBytes);
+
+        Optional<StatementUploadEntity> duplicate = persistenceGateway.findDuplicate(hash);
+        if (duplicate.isPresent()) {
+            StatementUploadEntity prev = duplicate.get();
+            log.warn("Duplicate upload detected — hash {} previously uploaded at {}", hash, prev.getUploadedAt());
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(SummaryResponse.builder()
+                            .uploadId(prev.getId())
+                            .detectedBank(prev.getBankName())
+                            .totalTransactions(prev.getTransactionCount())
+                            .build());
+        }
+
+        SummaryResponse summary = pipeline.buildSummaryCached(hash, fileBytes, file.getOriginalFilename());
+        log.info("Summary ready — uploadId={}, bank={}", summary.getUploadId(), summary.getDetectedBank());
+
+        if (webhookUrl != null && !webhookUrl.isBlank()) {
+            webhookService.notify(webhookUrl, summary);
+        }
+        return ResponseEntity.ok(summary);
+    }
+
+    // ── Single-file XLSX report ───────────────────────────────────────────────
+
+    @Override
+    @PostMapping(value = "/analyze/report", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public void downloadReport(@RequestParam("file") MultipartFile file,
+                               HttpServletResponse response) throws IOException {
+        fileUploadValidator.validate(file);
+        log.info("Report (XLSX) request — file: {}", file.getOriginalFilename());
+
+        byte[] fileBytes = file.getBytes();
+        String hash = DigestUtils.md5DigestAsHex(fileBytes);
+
+        Optional<StatementUploadEntity> duplicate = persistenceGateway.findDuplicate(hash);
+        if (duplicate.isPresent()) {
+            response.sendError(HttpStatus.CONFLICT.value(),
+                    "Already processed on " + duplicate.get().getUploadedAt() +
+                            " (uploadId=" + duplicate.get().getId() + ")");
+            return;
+        }
+
+        byte[] xlsxBytes = pipeline.buildExcelReportCached(hash, fileBytes, file.getOriginalFilename());
+
+        writeFileResponse(response, XLSX_MIME,
+                resolveFilename(file.getOriginalFilename(), "_report.xlsx"), xlsxBytes);
+    }
+
+    // ── Single-file PDF report ────────────────────────────────────────────────
+
+    private void writeFileResponse(HttpServletResponse response, String mime,
+                                   String filename, byte[] bytes) throws IOException {
+        response.setContentType(mime);
+        response.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+        response.setHeader("Cache-Control", "no-cache");
+        response.setContentLength(bytes.length);
+        response.getOutputStream().write(bytes);
+        response.flushBuffer();
+    }
+
+    // ── Multi-file summary ────────────────────────────────────────────────────
+
+    private String resolveFilename(String original, String suffix) {
+        if (original == null || original.isBlank()) return "bank" + suffix;
+        return original.replaceAll("(?i)\\.pdf$", "") + suffix;
+    }
+
+    // ── Multi-file XLSX report ────────────────────────────────────────────────
+
+    @Override
+    @PostMapping(value = "/analyze/pdf-report", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public void downloadPdfReport(@RequestParam("file") MultipartFile file,
+                                  HttpServletResponse response) throws IOException {
+        fileUploadValidator.validate(file);
+        log.info("PDF report request — file: {}", file.getOriginalFilename());
+
+        byte[] fileBytes = file.getBytes();
+        String hash = DigestUtils.md5DigestAsHex(fileBytes);
+
+        byte[] pdfBytes = pipeline.buildPdfReportCached(hash, fileBytes, file.getOriginalFilename());
+        log.info("PDF report ready for {}", file.getOriginalFilename());
+
+        writeFileResponse(response, PDF_MIME,
+                resolveFilename(file.getOriginalFilename(), "_report.pdf"), pdfBytes);
+    }
+
+    // ── Raw text (debug) ──────────────────────────────────────────────────────
+
+    @Override
+    @PostMapping(value = "/analyze/multi/summary", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<SummaryResponse> getMultiSummary(
+            @RequestParam("files") List<MultipartFile> files,
+            @RequestParam(value = "webhookUrl", required = false) String webhookUrl)
+            throws IOException {
+
+        multiFileUploadValidator.validate(files);
+        log.info("Multi-summary request — {} files", files.size());
+
+        List<Transaction> allTransactions = new ArrayList<>();
+        List<String> detectedBanks = new ArrayList<>();
+        ParseResult firstParsed = null;
+
+        for (MultipartFile file : files) {
+            fileUploadValidator.validate(file);
+            ParseResult parsed = parser.parseWithMeta(new ByteArrayInputStream(file.getBytes()));
+            List<Transaction> enriched = analyzer.analyze(parsed.getTransactions());
+            allTransactions.addAll(enriched);
+            detectedBanks.add(parsed.getBankName());
+            if (firstParsed == null) firstParsed = parsed;
+            log.info("  Parsed '{}' — bank={}, txns={}",
+                    file.getOriginalFilename(), parsed.getBankName(), enriched.size());
+        }
+
+        allTransactions.sort(Comparator.comparing(t -> t.getDate() != null ? t.getDate()
+                : java.time.LocalDate.MIN));
+
+        String bankLabel = detectedBanks.stream().distinct().collect(Collectors.joining(", "));
+        SummaryResponse summary = summaryBuilder.build(allTransactions, firstParsed, bankLabel)
+                .toBuilder()
+                .detectedBanks(detectedBanks)
+                .build();
+
+        if (webhookUrl != null && !webhookUrl.isBlank()) {
+            webhookService.notify(webhookUrl, summary);
+        }
+        return ResponseEntity.ok(summary);
+    }
+
+    // ── Async submit ──────────────────────────────────────────────────────────
+
+    @Override
+    @PostMapping(value = "/analyze/multi/report", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public void downloadMultiReport(@RequestParam("files") List<MultipartFile> files,
+                                    HttpServletResponse response) throws IOException {
+        multiFileUploadValidator.validate(files);
+        log.info("Multi-report (XLSX) request — {} files", files.size());
+
+        List<Transaction> allTransactions = new ArrayList<>();
+        for (MultipartFile file : files) {
+            fileUploadValidator.validate(file);
+            ParseResult parsed = parser.parseWithMeta(new ByteArrayInputStream(file.getBytes()));
+            List<Transaction> enriched = analyzer.analyze(parsed.getTransactions());
+            allTransactions.addAll(enriched);
+        }
+        allTransactions.sort(Comparator.comparing(t -> t.getDate() != null ? t.getDate()
+                : java.time.LocalDate.MIN));
+
+        byte[] xlsxBytes = excelReportGenerator.generateBytes(allTransactions);
+        writeFileResponse(response, XLSX_MIME, "merged_report.xlsx", xlsxBytes);
+    }
+
+    // ── Async status poll ─────────────────────────────────────────────────────
+
+    @Override
+    @PostMapping(value = "/analyze/raw-text", consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+            produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> getRawText(@RequestParam("file") MultipartFile file)
+            throws IOException {
+        fileUploadValidator.validate(file);
+        return ResponseEntity.ok(parser.extractRawText(new ByteArrayInputStream(file.getBytes())));
+    }
+
+    // ── SSE job stream ────────────────────────────────────────────────────────
+
+    @Override
+    @PostMapping(value = "/analyze/submit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<SubmitJobResponse> submitJob(
+            @RequestParam("file") MultipartFile file,
+            HttpServletRequest request) throws IOException {
+
+        fileUploadValidator.validate(file);
+        log.info("Async job submit — file: {}", file.getOriginalFilename());
+
+        String baseUrl = request.getScheme() + "://" + request.getServerName()
+                + ":" + request.getServerPort();
+
+        SubmitJobResponse resp = asyncJobService.submit(
+                file.getBytes(), file.getOriginalFilename(), baseUrl);
+        return ResponseEntity.accepted().body(resp);
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    @Override
+    @GetMapping("/analyze/status/{jobId}")
+    public ResponseEntity<JobStatusResponse> getJobStatus(@PathVariable String jobId) {
+        JobStatusResponse resp = asyncJobService.getStatus(jobId);
+        HttpStatus status = switch (resp.getStatus()) {
+            case DONE -> HttpStatus.OK;
+            case FAILED -> HttpStatus.INTERNAL_SERVER_ERROR;
+            default -> HttpStatus.ACCEPTED;
+        };
+        return ResponseEntity.status(status).body(resp);
+    }
+
+    @Override
+    @GetMapping(value = "/analyze/stream/{jobId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<JobStatusResponse>> streamJobStatus(@PathVariable String jobId) {
+        return Flux.interval(Duration.ofSeconds(1))
+                .map(tick -> asyncJobService.getStatus(jobId))
+                .takeUntil(status ->
+                        status.getStatus() == JobStatus.DONE ||
+                                status.getStatus() == JobStatus.FAILED)
+                .map(status -> ServerSentEvent.<JobStatusResponse>builder()
+                        .id(String.valueOf(System.currentTimeMillis()))
+                        .event(status.getStatus().name().toLowerCase())
+                        .data(status)
+                        .build())
+                .timeout(Duration.ofMinutes(5));
+    }
+}

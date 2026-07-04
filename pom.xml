@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.5</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.bankanalyzer</groupId>
+    <artifactId>bank-statement-analyzer</artifactId>
+    <version>1.3.0</version>
+    <packaging>pom</packaging>
+    <name>Bank Statement Analyzer (parent)</name>
+
+    <!--
+        Phase 2 multi-module reactor: bank-common is a pure, framework-light domain
+        module; parser-module and report-module each depend only on bank-common;
+        analysis-module depends on both (it needs parsing to run its pipeline and
+        report-module for the pipeline's cached report-generation methods);
+        gateway-module assembles everything into the one runnable Spring Boot app.
+        Still a SINGLE deployable at this phase — no service is independently run yet.
+    -->
+    <modules>
+        <module>bank-common</module>
+        <module>parser-module</module>
+        <module>report-module</module>
+        <module>analysis-module</module>
+        <module>gateway-module</module>
+    </modules>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <pdfbox.version>3.0.1</pdfbox.version>
+        <poi.version>5.3.0</poi.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.bankanalyzer</groupId>
+                <artifactId>bank-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.bankanalyzer</groupId>
+                <artifactId>parser-module</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.bankanalyzer</groupId>
+                <artifactId>report-module</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.bankanalyzer</groupId>
+                <artifactId>analysis-module</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>

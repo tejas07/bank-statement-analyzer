@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.bankanalyzer</groupId>
+        <artifactId>bank-statement-analyzer</artifactId>
+        <version>1.3.0</version>
+    </parent>
+
+    <artifactId>analysis-module</artifactId>
+    <packaging>jar</packaging>
+    <name>Bank Statement Analyzer - Analysis</name>
+
+    <!--
+        Transaction enrichment/categorization, spending analytics, forecasting,
+        the async Kafka job pipeline, and (for now) persistence. Depends on
+        parser-module (StatementParsing, for the pipeline) and report-module
+        (the pipeline's cached @Cacheable XLSX/PDF report-generation methods).
+
+        Persistence (model.entity/repository/PersistenceGateway) stays here for
+        Phase 2 rather than moving to gateway-module — the "who owns persistence"
+        call is explicitly a Phase 3 decision per the plan, and moving it now would
+        create a gateway <-> analysis cycle (both the sync and async paths persist
+        through the same pipeline).
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>com.bankanalyzer</groupId>
+            <artifactId>bank-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.bankanalyzer</groupId>
+            <artifactId>parser-module</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.bankanalyzer</groupId>
+            <artifactId>report-module</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <version>10.12.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.bankanalyzer</groupId>
+        <artifactId>bank-statement-analyzer</artifactId>
+        <version>1.3.0</version>
+    </parent>
+
+    <artifactId>bank-common</artifactId>
+    <packaging>jar</packaging>
+    <name>Bank Statement Analyzer - Common</name>
+
+    <!--
+        Deliberately thin: domain models (model), API DTOs (api.dto), validators
+        (validation), and Kafka event contracts (kafka event records only) shared
+        across every other module. No Spring Web/Kafka/JPA/POI/PDFBox dependency —
+        just enough Spring to support @Component-annotated validators.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>
